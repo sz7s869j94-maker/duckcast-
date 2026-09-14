@@ -16,6 +16,9 @@ concurrency:
   group: duckcast-expo-preview
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   preview:
     runs-on: ubuntu-latest
