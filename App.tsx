@@ -17,7 +17,8 @@ import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
 
 type Tab = 'Map' | 'Weather' | 'Reports' | 'Journal' | 'Profile';
-type Waypoint = { id: string; name: string; latitude: number; longitude: number; private: boolean };
+type WaypointType = 'Hunt Spot' | 'Camera' | 'Blind' | 'Food Plot' | 'Access';
+type Waypoint = { id: string; name: string; latitude: number; longitude: number; private: boolean; type: WaypointType; color: string };
 type Report = { id: string; location: string; birds: string; species: string; notes: string };
 type Weather = {
   temperature: number;
@@ -29,6 +30,7 @@ type Weather = {
   condition: string;
   updatedAt: string;
   hourly: { time: string; temp: number; wind: number }[];
+  daily: { date: string; high: number; low: number; rainChance: number; rain: number; wind: number }[];
 };
 
 const ORANGE = '#EF7C22';
@@ -64,6 +66,12 @@ export default function App() {
   const [draftName, setDraftName] = useState('');
   const [activePhoto, setActivePhoto] = useState<string | null>(null);
   const [journalCount, setJournalCount] = useState(0);
+  const [mapControls, setMapControls] = useState(false);
+  const [showWaypoints, setShowWaypoints] = useState(true);
+  const [showLabels, setShowLabels] = useState(true);
+  const [forecastRange, setForecastRange] = useState<'Hourly' | '3-Day' | '7-Day'>('Hourly');
+  const [draftType, setDraftType] = useState<WaypointType>('Hunt Spot');
+  const [draftColor, setDraftColor] = useState(ORANGE);
 
   const selected = useMemo(
     () => waypoints.find((point) => point.id === selectedId) ?? waypoints[0],
@@ -99,10 +107,14 @@ export default function App() {
       latitude,
       longitude,
       private: true,
+      type: 'Hunt Spot',
+      color: ORANGE,
     };
     setWaypoints((current) => [...current, point]);
     setSelectedId(point.id);
     setDraftName(point.name);
+    setDraftType(point.type);
+    setDraftColor(point.color);
     setWeather(null);
     setEditing(true);
   }
@@ -112,7 +124,7 @@ export default function App() {
     if (!target) return;
     try {
       setWeatherLoading(true);
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${target.latitude}&longitude=${target.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure&hourly=temperature_2m,wind_speed_10m&daily=rain_sum&past_days=7&forecast_days=2&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto`;
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${target.latitude}&longitude=${target.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure&hourly=temperature_2m,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,rain_sum,wind_speed_10m_max&past_days=7&forecast_days=7&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto`;
       const response = await fetch(url);
       if (!response.ok) throw new Error('Weather service unavailable');
       const data = await response.json();
@@ -131,10 +143,18 @@ export default function App() {
         humidity: Number(data.current?.relative_humidity_2m ?? 0),
         condition: codes[Number(data.current?.weather_code)] ?? 'Current Conditions',
         updatedAt: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        hourly: times.slice(nowIndex, nowIndex + 8).map((time, index) => ({
+        hourly: times.slice(nowIndex, nowIndex + 12).map((time, index) => ({
           time: new Date(time).toLocaleTimeString([], { hour: 'numeric' }),
           temp: Number(temps[nowIndex + index] ?? 0),
           wind: Number(winds[nowIndex + index] ?? 0),
+        })),
+        daily: ((data.daily?.time ?? []) as string[]).slice(-7).map((date, index) => ({
+          date: new Date(date + 'T12:00:00').toLocaleDateString([], { weekday: 'short' }),
+          high: Number((data.daily?.temperature_2m_max ?? []).slice(-7)[index] ?? 0),
+          low: Number((data.daily?.temperature_2m_min ?? []).slice(-7)[index] ?? 0),
+          rainChance: Number((data.daily?.precipitation_probability_max ?? []).slice(-7)[index] ?? 0),
+          rain: Number((data.daily?.rain_sum ?? []).slice(-7)[index] ?? 0),
+          wind: Number((data.daily?.wind_speed_10m_max ?? []).slice(-7)[index] ?? 0),
         })),
       });
     } catch {
@@ -167,7 +187,7 @@ export default function App() {
   function saveWaypointName() {
     const name = draftName.trim();
     if (!name || !selected) return;
-    setWaypoints((current) => current.map((point) => point.id === selected.id ? { ...point, name } : point));
+    setWaypoints((current) => current.map((point) => point.id === selected.id ? { ...point, name, type: draftType, color: draftColor } : point));
     setEditing(false);
   }
 
@@ -220,12 +240,12 @@ export default function App() {
                   event.nativeEvent.coordinate.longitude
                 )}
               >
-                {waypoints.map((point) => (
+                {showWaypoints && waypoints.map((point) => (
                   <Marker
                     key={point.id}
                     coordinate={point}
-                    title={point.name}
-                    pinColor={ORANGE}
+                    title={showLabels ? `${point.type}: ${point.name}` : undefined}
+                    pinColor={point.color}
                     draggable
                     onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }}
                     onDragEnd={(event) => moveWaypoint(point, event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
@@ -240,11 +260,8 @@ export default function App() {
                   <Text style={styles.glassText}>‹  Back</Text>
                 </Pressable>
                 <View style={styles.mapTools}>
-                  <Pressable
-                    style={styles.squareButton}
-                    onPress={() => setMapType((current) => current === 'hybrid' ? 'satellite' : 'hybrid')}
-                  >
-                    <Text style={styles.toolIcon}>▱</Text>
+                  <Pressable style={[styles.squareButton, styles.actionButton]} onPress={() => setMapControls(true)}>
+                    <Text style={styles.toolIcon}>☰</Text>
                   </Pressable>
                   <Pressable style={styles.squareButton} onPress={locateUser}>
                     <Text style={styles.toolIcon}>➤</Text>
@@ -264,7 +281,7 @@ export default function App() {
             <View style={styles.titleRow}>
               <View style={styles.flex}>
                 <Text style={styles.locationTitle}>{selected.name}</Text>
-                <Text style={styles.privateLine}>▣  {selected.private ? 'Private Waypoint' : 'Shared Waypoint'}</Text>
+                <Text style={styles.privateLine}>▣  {selected.private ? 'Private' : 'Shared'} · {selected.type}</Text>
                 <Text style={styles.coordinates}>
                   {selected.latitude.toFixed(4)}° N, {Math.abs(selected.longitude).toFixed(4)}° W
                 </Text>
@@ -342,8 +359,8 @@ export default function App() {
               onLongPress={(event) => addWaypoint(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
             />
             <View style={styles.emptyMapTools}>
-              <Pressable style={styles.squareButton} onPress={() => setMapType((current) => current === 'hybrid' ? 'satellite' : 'hybrid')}>
-                <Text style={styles.toolIcon}>▱</Text>
+              <Pressable style={[styles.squareButton, styles.actionButton]} onPress={() => setMapControls(true)}>
+                <Text style={styles.toolIcon}>☰</Text>
               </Pressable>
               <Pressable style={styles.squareButton} onPress={locateUser}><Text style={styles.toolIcon}>➤</Text></Pressable>
             </View>
@@ -359,6 +376,36 @@ export default function App() {
             <Text style={styles.eyebrow}>LIVE CONDITIONS</Text>
             <Text style={styles.pageTitle}>Marsh Weather</Text>
             <WeatherPanel weather={weather} loading={weatherLoading} onRefresh={() => refreshWeather()} />
+            <View style={styles.forecastTabs}>
+              {(['Hourly', '3-Day', '7-Day'] as const).map((range) => (
+                <Pressable key={range} style={[styles.forecastTab, forecastRange === range && styles.forecastTabActive]} onPress={() => setForecastRange(range)}>
+                  <Text style={[styles.forecastTabText, forecastRange === range && styles.forecastTabTextActive]}>{range}</Text>
+                </Pressable>
+              ))}
+            </View>
+            {weather && forecastRange === 'Hourly' && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.largeForecastRail}>
+                {weather.hourly.map((hour) => (
+                  <View style={styles.largeHourCard} key={hour.time}>
+                    <Text style={styles.hourTime}>{hour.time}</Text>
+                    <Text style={styles.largeHourTemp}>{hour.temp.toFixed(0)}°</Text>
+                    <Text style={styles.hourWind}>➤ {hour.wind.toFixed(0)} mph</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+            {weather && forecastRange !== 'Hourly' && (
+              <View style={styles.dailyForecast}>
+                {weather.daily.slice(0, forecastRange === '3-Day' ? 3 : 7).map((day) => (
+                  <View style={styles.dayRow} key={day.date}>
+                    <Text style={styles.dayName}>{day.date}</Text>
+                    <Text style={styles.dayRain}>● {day.rainChance.toFixed(0)}% · {day.rain.toFixed(2)} in</Text>
+                    <Text style={styles.dayWind}>➤ {day.wind.toFixed(0)}</Text>
+                    <Text style={styles.dayTemps}>{day.high.toFixed(0)}°  <Text style={styles.dayLow}>{day.low.toFixed(0)}°</Text></Text>
+                  </View>
+                ))}
+              </View>
+            )}
             <View style={styles.panel}>
               <Text style={styles.panelTitle}>Waypoint forecast</Text>
               {waypoints.map((point) => (
@@ -422,6 +469,24 @@ export default function App() {
         )}
       </View>
 
+      <Modal visible={mapControls} transparent animationType="fade" onRequestClose={() => setMapControls(false)}>
+        <Pressable style={styles.controlBackdrop} onPress={() => setMapControls(false)}>
+          <View style={styles.mapControlCard}>
+            <Text style={styles.mapControlTitle}>Map Display</Text>
+            <Pressable style={styles.controlRow} onPress={() => setShowWaypoints((value) => !value)}>
+              <Text style={styles.rowTitle}>Waypoints</Text><Text style={styles.controlValue}>{showWaypoints ? 'ON' : 'OFF'}</Text>
+            </Pressable>
+            <Pressable style={styles.controlRow} onPress={() => setShowLabels((value) => !value)}>
+              <Text style={styles.rowTitle}>Waypoint Labels</Text><Text style={styles.controlValue}>{showLabels ? 'ON' : 'OFF'}</Text>
+            </Pressable>
+            <Pressable style={styles.controlRow} onPress={() => setMapType((value) => value === 'hybrid' ? 'satellite' : 'hybrid')}>
+              <Text style={styles.rowTitle}>Map Style</Text><Text style={styles.controlValue}>{mapType.toUpperCase()}</Text>
+            </Pressable>
+            <Text style={styles.controlHint}>Long-press to add · Drag a marker to move it</Text>
+          </View>
+        </Pressable>
+      </Modal>
+
       <Modal visible={editing} transparent animationType="slide" onRequestClose={() => setEditing(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.sheet}>
@@ -429,6 +494,20 @@ export default function App() {
             <Text style={styles.sheetTitle}>Edit Waypoint</Text>
             <Text style={styles.sheetLabel}>WAYPOINT NAME</Text>
             <TextInput style={styles.input} value={draftName} onChangeText={setDraftName} autoFocus />
+            <Text style={styles.sheetLabel}>TYPE</Text>
+            <View style={styles.optionWrap}>
+              {(['Hunt Spot', 'Camera', 'Blind', 'Food Plot', 'Access'] as WaypointType[]).map((type) => (
+                <Pressable key={type} style={[styles.typeOption, draftType === type && styles.typeOptionActive]} onPress={() => setDraftType(type)}>
+                  <Text style={[styles.typeOptionText, draftType === type && styles.optionTextActive]}>{type}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <Text style={styles.sheetLabel}>MARKER COLOR</Text>
+            <View style={styles.colorRow}>
+              {['#EF7C22', '#D7B43A', '#4EA66D', '#3C92D1', '#9C68C7', '#D95858'].map((color) => (
+                <Pressable key={color} style={[styles.colorDot, { backgroundColor: color }, draftColor === color && styles.colorDotActive]} onPress={() => setDraftColor(color)} />
+              ))}
+            </View>
             <Pressable style={styles.privacyRow} onPress={togglePrivacy}>
               <View>
                 <Text style={styles.rowTitle}>{selected?.private ? 'Private waypoint' : 'Shared waypoint'}</Text>
@@ -559,6 +638,7 @@ const styles = StyleSheet.create({
   mapPage: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 22, gap: 12 },
   emptyMapWrap: { flex: 1, backgroundColor: '#14231B' },
   emptyMapTools: { position: 'absolute', right: 14, top: 14, gap: 9 },
+  actionButton: { backgroundColor: 'rgba(239,124,34,0.94)', borderColor: '#FFB16F' },
   cleanSlateCard: { position: 'absolute', left: 15, right: 15, bottom: 18, padding: 16, borderRadius: 15, backgroundColor: 'rgba(8,21,16,0.94)', borderWidth: 1, borderColor: '#536158' },
   cleanSlateTitle: { color: '#EADCCB', fontFamily: 'Georgia', fontSize: 21, fontWeight: '800' },
   cleanSlateText: { color: '#A5AEA8', lineHeight: 19, marginTop: 5 },
@@ -659,6 +739,35 @@ const styles = StyleSheet.create({
   avatarText: { color: '#0B1710', fontSize: 28, fontWeight: '900' },
   profileName: { color: '#EADCCB', fontSize: 24, fontWeight: '800' },
   settingsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#122219', borderBottomWidth: 1, borderBottomColor: '#33463B', padding: 16 },
+  forecastTabs: { flexDirection: 'row', gap: 7, backgroundColor: '#0D1B14', padding: 5, borderRadius: 12, borderWidth: 1, borderColor: '#314238' },
+  forecastTab: { flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 8 },
+  forecastTabActive: { backgroundColor: ORANGE },
+  forecastTabText: { color: '#98A29B', fontWeight: '800', fontSize: 12 },
+  forecastTabTextActive: { color: '#FFFFFF' },
+  largeForecastRail: { marginVertical: 2 },
+  largeHourCard: { width: 82, minHeight: 98, alignItems: 'center', justifyContent: 'center', marginRight: 8, borderRadius: 13, backgroundColor: '#13231B', borderWidth: 1, borderColor: '#34463C' },
+  largeHourTemp: { color: '#F1E7D8', fontSize: 25, fontWeight: '900', marginVertical: 7 },
+  dailyForecast: { backgroundColor: '#122219', borderWidth: 1, borderColor: '#34463C', borderRadius: 15, overflow: 'hidden' },
+  dayRow: { minHeight: 57, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, borderBottomWidth: 1, borderBottomColor: '#2A3A31' },
+  dayName: { width: 42, color: '#F0E6D9', fontWeight: '900' },
+  dayRain: { flex: 1, color: '#73A9CC', fontSize: 11 },
+  dayWind: { width: 52, color: '#B5BEB7', fontSize: 11 },
+  dayTemps: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
+  dayLow: { color: '#89958D' },
+  controlBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.42)' },
+  mapControlCard: { position: 'absolute', top: 128, right: 18, width: 245, backgroundColor: '#0E1D15', borderRadius: 17, borderWidth: 1, borderColor: '#506158', padding: 15 },
+  mapControlTitle: { color: '#EADCCB', fontFamily: 'Georgia', fontSize: 21, fontWeight: '800', marginBottom: 7 },
+  controlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 47, borderBottomWidth: 1, borderBottomColor: '#293A31' },
+  controlValue: { color: ORANGE, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  controlHint: { color: '#7F8C84', fontSize: 10, marginTop: 11, lineHeight: 15 },
+  optionWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  typeOption: { paddingHorizontal: 11, paddingVertical: 9, borderRadius: 18, borderWidth: 1, borderColor: '#3A4B41' },
+  typeOptionActive: { backgroundColor: ORANGE, borderColor: ORANGE },
+  typeOptionText: { color: '#ADB5AF', fontSize: 11, fontWeight: '800' },
+  optionTextActive: { color: '#FFFFFF' },
+  colorRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
+  colorDot: { width: 34, height: 34, borderRadius: 17, borderWidth: 3, borderColor: '#0E1D15' },
+  colorDotActive: { borderColor: '#FFFFFF', transform: [{ scale: 1.12 }] },
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.68)' },
   sheet: { backgroundColor: '#0E1D15', borderTopLeftRadius: 24, borderTopRightRadius: 24, borderWidth: 1, borderColor: '#3A4B41', padding: 20, paddingBottom: 34, gap: 12 },
   sheetHandle: { width: 46, height: 5, borderRadius: 3, backgroundColor: '#536158', alignSelf: 'center', marginBottom: 5 },
