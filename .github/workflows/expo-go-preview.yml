@@ -38,6 +38,12 @@ jobs:
           npx expo install --fix
           npx expo-doctor@latest
 
+      - name: Sign in to Expo
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
       - name: Install Cloudflare tunnel
         run: |
           curl --fail --location --silent --show-error \
