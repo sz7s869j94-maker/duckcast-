@@ -18,6 +18,8 @@ import { StatusBar } from 'expo-status-bar';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 
+// DuckCast network preview: private by default, shared only through accepted email links.
+
 type Tab = 'Map' | 'Weather' | 'Reports' | 'Journal' | 'Profile';
 type WaypointType = 'Hunt Spot' | 'Camera' | 'Blind' | 'Food Plot' | 'Access';
 type Waypoint = { id: string; name: string; latitude: number; longitude: number; private: boolean; type: WaypointType; color: string };
