@@ -11,7 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import MapView, { Marker, Region, UrlTile } from 'react-native-maps';
+import MapView, { Geojson, Marker, Region, UrlTile } from 'react-native-maps';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
@@ -96,15 +96,18 @@ export default function App() {
   const [journalWaypointId, setJournalWaypointId] = useState('');
   const [mapControls, setMapControls] = useState(false);
   const [showWaypoints, setShowWaypoints] = useState(true);
-  const [showLabels, setShowLabels] = useState(true);
   const [showRadar, setShowRadar] = useState(false);
   const [showWind, setShowWind] = useState(false);
+  const [showPublicLands, setShowPublicLands] = useState(false);
+  const [showBoundaries, setShowBoundaries] = useState(false);
+  const [publicLandGeojson, setPublicLandGeojson] = useState<any>({ type: 'FeatureCollection', features: [] });
+  const [parcelGeojson, setParcelGeojson] = useState<any>({ type: 'FeatureCollection', features: [] });
   const [radarUrl, setRadarUrl] = useState('');
   const [radarTime, setRadarTime] = useState('');
   const [radarFrames, setRadarFrames] = useState<RadarFrame[]>([]);
   const [radarFrameIndex, setRadarFrameIndex] = useState(0);
   const [waypointWind, setWaypointWind] = useState<Record<string, WindReading>>({});
-  const [forecastRange, setForecastRange] = useState<'Hourly' | '3-Day' | '7-Day'>('Hourly');
+  const [forecastRange, setForecastRange] = useState<'Hourly' | '24 Hours' | '7-Day'>('Hourly');
   const [draftType, setDraftType] = useState<WaypointType>('Hunt Spot');
   const [draftColor, setDraftColor] = useState(ORANGE);
   const [linkedHunters, setLinkedHunters] = useState<LinkedHunter[]>([]);
@@ -188,6 +191,36 @@ export default function App() {
   useEffect(() => {
     if (showWind && waypoints.length) void refreshWaypointWind();
   }, [showWind, waypoints.length]);
+
+  useEffect(() => {
+    if (!showPublicLands && !showBoundaries) return;
+    const timer = setTimeout(() => void refreshLandLayers(), 700);
+    return () => clearTimeout(timer);
+  }, [region.latitude, region.longitude, region.latitudeDelta, region.longitudeDelta, showPublicLands, showBoundaries]);
+
+  async function refreshLandLayers() {
+    const west = region.longitude - region.longitudeDelta / 2;
+    const east = region.longitude + region.longitudeDelta / 2;
+    const south = region.latitude - region.latitudeDelta / 2;
+    const north = region.latitude + region.latitudeDelta / 2;
+    const query = `geometry=${encodeURIComponent(`${west},${south},${east},${north}`)}&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326&spatialRel=esriSpatialRelIntersects&outFields=OBJECTID&returnGeometry=true&f=geojson&resultRecordCount=2000`;
+    try {
+      if (showPublicLands) {
+        const layers = await Promise.all([0, 1, 2, 3, 4, 5, 6].map(async (layer) => {
+          const response = await fetch(`https://dnrmaps.wi.gov/arcgis/rest/services/LF_DML/LF_DNR_PUBLIC_LAND_WTM_Ext/MapServer/${layer}/query?where=1%3D1&${query}`);
+          return response.ok ? response.json() : { features: [] };
+        }));
+        setPublicLandGeojson({ type: 'FeatureCollection', features: layers.flatMap((layer) => layer.features ?? []) });
+      } else setPublicLandGeojson({ type: 'FeatureCollection', features: [] });
+      if (showBoundaries) {
+        const response = await fetch(`https://dnrmaps.wi.gov/arcgis/rest/services/DW_Map_Dynamic/EN_County_Tax_Parcels_WTM_Ext_Dynamic_L16/MapServer/0/query?where=1%3D1&${query}`);
+        const data = response.ok ? await response.json() : { features: [] };
+        setParcelGeojson({ type: 'FeatureCollection', features: data.features ?? [] });
+      } else setParcelGeojson({ type: 'FeatureCollection', features: [] });
+    } catch {
+      Alert.alert('Land layers', 'Land boundary data could not be loaded for this map area.');
+    }
+  }
 
   async function refreshRadar() {
     try {
@@ -289,7 +322,7 @@ export default function App() {
         humidity: Number(data.current?.relative_humidity_2m ?? 0),
         condition: codes[Number(data.current?.weather_code)] ?? 'Current Conditions',
         updatedAt: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        hourly: times.slice(nowIndex, nowIndex + 12).map((time, index) => ({
+        hourly: times.slice(nowIndex, nowIndex + 24).map((time, index) => ({
           time: new Date(time).toLocaleTimeString([], { hour: 'numeric' }),
           temp: Number(temps[nowIndex + index] ?? 0),
           wind: Number(winds[nowIndex + index] ?? 0),
@@ -486,9 +519,11 @@ export default function App() {
                   event.nativeEvent.coordinate.longitude
                 )}
               >
+                {showPublicLands && <Geojson geojson={publicLandGeojson} fillColor="rgba(55,155,76,0.28)" strokeColor="#71D184" strokeWidth={1.2} />}
+                {showBoundaries && <Geojson geojson={parcelGeojson} fillColor="rgba(0,0,0,0)" strokeColor="rgba(255,235,175,0.88)" strokeWidth={0.8} />}
                 {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={7} opacity={0.68} zIndex={2} tileSize={256} />}
                 {showWaypoints && waypoints.map((point) => (
-                  <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={showLabels} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
+                  <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={selectedId === point.id} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
                 ))}
               </MapView>
               <View style={styles.mapTopRow}>
@@ -496,7 +531,7 @@ export default function App() {
                   style={styles.glassButton}
                   onPress={closeWaypointDetail}
                 >
-                  <Text style={styles.glassText}>‹  Back</Text>
+                  <Text style={styles.fullMapText}>‹ Full Map</Text>
                 </Pressable>
                 <View style={styles.mapTools}>
                   <Pressable style={[styles.squareButton, styles.actionButton]} onPress={() => setMapControls(true)}>
@@ -583,9 +618,11 @@ export default function App() {
               showsCompass
               onLongPress={(event) => addWaypoint(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
             >
+              {showPublicLands && <Geojson geojson={publicLandGeojson} fillColor="rgba(55,155,76,0.28)" strokeColor="#71D184" strokeWidth={1.2} />}
+              {showBoundaries && <Geojson geojson={parcelGeojson} fillColor="rgba(0,0,0,0)" strokeColor="rgba(255,235,175,0.88)" strokeWidth={0.8} />}
               {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={7} opacity={0.68} zIndex={2} tileSize={256} />}
               {showWaypoints && waypoints.map((point) => (
-                <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={showLabels} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
+                <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={selectedId === point.id} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
               ))}
             </MapView>
             <View style={styles.emptyMapTools}>
@@ -608,15 +645,15 @@ export default function App() {
             <Text style={styles.pageTitle}>Marsh Weather</Text>
             <WeatherPanel weather={weather} loading={weatherLoading} onRefresh={() => refreshWeather()} />
             <View style={styles.forecastTabs}>
-              {(['Hourly', '3-Day', '7-Day'] as const).map((range) => (
+              {(['Hourly', '24 Hours', '7-Day'] as const).map((range) => (
                 <Pressable key={range} style={[styles.forecastTab, forecastRange === range && styles.forecastTabActive]} onPress={() => setForecastRange(range)}>
                   <Text style={[styles.forecastTabText, forecastRange === range && styles.forecastTabTextActive]}>{range}</Text>
                 </Pressable>
               ))}
             </View>
-            {weather && forecastRange === 'Hourly' && (
+            {weather && (forecastRange === 'Hourly' || forecastRange === '24 Hours') && (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.largeForecastRail}>
-                {weather.hourly.map((hour) => (
+                {weather.hourly.slice(0, forecastRange === 'Hourly' ? 12 : 24).map((hour) => (
                   <View style={styles.largeHourCard} key={hour.time}>
                     <Text style={styles.hourTime}>{hour.time}</Text>
                     <Text style={styles.largeHourTemp}>{hour.temp.toFixed(0)}°</Text>
@@ -625,9 +662,9 @@ export default function App() {
                 ))}
               </ScrollView>
             )}
-            {weather && forecastRange !== 'Hourly' && (
+            {weather && forecastRange === '7-Day' && (
               <View style={styles.dailyForecast}>
-                {weather.daily.slice(0, forecastRange === '3-Day' ? 3 : 7).map((day) => (
+                {weather.daily.slice(0, 7).map((day) => (
                   <View style={styles.dayRow} key={day.date}>
                     <Text style={styles.dayName}>{day.date}</Text>
                     <Text style={styles.dayRain}>● {day.rainChance.toFixed(0)}% · {day.rain.toFixed(2)} in</Text>
@@ -716,8 +753,11 @@ export default function App() {
             <Pressable style={styles.controlRow} onPress={() => setShowWaypoints((value) => !value)}>
               <Text style={styles.rowTitle}>Waypoints</Text><Text style={styles.controlValue}>{showWaypoints ? 'ON' : 'OFF'}</Text>
             </Pressable>
-            <Pressable style={styles.controlRow} onPress={() => setShowLabels((value) => !value)}>
-              <Text style={styles.rowTitle}>Waypoint Labels</Text><Text style={styles.controlValue}>{showLabels ? 'ON' : 'OFF'}</Text>
+            <Pressable style={styles.controlRow} onPress={() => setShowPublicLands((value) => !value)}>
+              <View><Text style={styles.rowTitle}>Public Access Lands</Text><Text style={styles.controlSub}>Wisconsin DNR, county and federal lands</Text></View><Text style={styles.controlValue}>{showPublicLands ? 'ON' : 'OFF'}</Text>
+            </Pressable>
+            <Pressable style={styles.controlRow} onPress={() => setShowBoundaries((value) => !value)}>
+              <View><Text style={styles.rowTitle}>Property Boundaries</Text><Text style={styles.controlSub}>Wisconsin statewide parcel lines</Text></View><Text style={styles.controlValue}>{showBoundaries ? 'ON' : 'OFF'}</Text>
             </Pressable>
             <Pressable style={styles.controlRow} onPress={() => setShowRadar((value) => !value)}>
               <View><Text style={styles.rowTitle}>Precipitation Radar</Text><Text style={styles.controlSub}>Continuously animated rolling radar</Text></View><Text style={styles.controlValue}>{showRadar ? 'ON' : 'OFF'}</Text>
@@ -867,7 +907,7 @@ function ShareToggle({ shared, onPress }: { shared: boolean; onPress: () => void
 }
 
 function WeatherPanel({ weather, loading, onRefresh }: { weather: Weather | null; loading: boolean; onRefresh: () => void }) {
-  const [range, setRange] = useState<'Hourly' | '3 Day' | '7 Day'>('Hourly');
+  const [range, setRange] = useState<'Hourly' | '24 Hours' | '7 Day'>('Hourly');
   const [selectedDay, setSelectedDay] = useState(0);
   if (!weather) {
     return (
@@ -893,20 +933,20 @@ function WeatherPanel({ weather, loading, onRefresh }: { weather: Weather | null
         <Metric icon="◴" label="Pressure" value={`${weather.pressure.toFixed(2)} in`} />
       </View>
       <View style={styles.compactForecastTabs}>
-        {(['Hourly', '3 Day', '7 Day'] as const).map((item) => (
+        {(['Hourly', '24 Hours', '7 Day'] as const).map((item) => (
           <Pressable key={item} style={[styles.compactForecastTab, range === item && styles.compactForecastTabActive]} onPress={() => { setRange(item); setSelectedDay(0); }}>
             <Text style={[styles.compactForecastText, range === item && styles.compactForecastTextActive]}>{item}</Text>
           </Pressable>
         ))}
       </View>
-      {range === 'Hourly' ? (
+      {range !== '7 Day' ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hourlyRail}>
-          {weather.hourly.map((hour) => <View style={styles.hourCard} key={hour.time}><Text style={styles.hourTime}>{hour.time}</Text><Text style={styles.hourTemp}>{hour.temp.toFixed(0)}°</Text><Text style={styles.hourWind}>{hour.wind.toFixed(0)} mph</Text></View>)}
+          {weather.hourly.slice(0, range === 'Hourly' ? 12 : 24).map((hour, index) => <View style={styles.hourCard} key={`${hour.time}-${index}`}><Text style={styles.hourTime}>{hour.time}</Text><Text style={styles.hourTemp}>{hour.temp.toFixed(0)}°</Text><Text style={styles.hourWind}>{hour.wind.toFixed(0)} mph</Text></View>)}
         </ScrollView>
       ) : (
         <View style={styles.dayForecastWrap}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {weather.daily.slice(0, range === '3 Day' ? 3 : 7).map((day, index) => (
+            {weather.daily.slice(0, 7).map((day, index) => (
               <Pressable key={`${day.date}-${index}`} style={[styles.dayCard, selectedDay === index && styles.dayCardActive]} onPress={() => setSelectedDay(index)}><Text style={styles.dayCardName}>{day.date}</Text><Text style={styles.dayCardTemp}>{day.high.toFixed(0)}°</Text><Text style={styles.dayCardLow}>{day.low.toFixed(0)}°</Text></Pressable>
             ))}
           </ScrollView>
@@ -971,6 +1011,7 @@ const styles = StyleSheet.create({
   mapTopRow: { position: 'absolute', top: 10, left: 10, right: 10, flexDirection: 'row', justifyContent: 'space-between' },
   glassButton: { backgroundColor: 'rgba(5,13,9,0.78)', paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12 },
   glassText: { color: '#FFFFFF', fontWeight: '800', fontSize: 15 },
+  fullMapText: { color: '#FFFFFF', fontWeight: '800', fontSize: 12 },
   mapTools: { gap: 8 },
   squareButton: { width: 42, height: 42, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(5,13,9,0.82)', borderWidth: 1, borderColor: '#566159' },
   toolIcon: { color: '#FFFFFF', fontSize: 21 },
