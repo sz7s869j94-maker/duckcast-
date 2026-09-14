@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Image,
@@ -25,6 +25,10 @@ type Weather = {
   windDirection: number;
   pressure: number;
   rain7d: number;
+  humidity: number;
+  condition: string;
+  updatedAt: string;
+  hourly: { time: string; temp: number; wind: number }[];
 };
 
 const ORANGE = '#EF7C22';
@@ -44,18 +48,12 @@ const samplePhotos = [
 export default function App() {
   const [tab, setTab] = useState<Tab>('Map');
   const [region, setRegion] = useState<Region>(DEFAULT_REGION);
-  const [waypoints, setWaypoints] = useState<Waypoint[]>([
-    { id: 'north-marsh', name: 'North Marsh Camera', latitude: 44.50, longitude: -89.50, private: true },
-  ]);
-  const [selectedId, setSelectedId] = useState('north-marsh');
-  const [weather, setWeather] = useState<Weather>({
-    temperature: 42,
-    windSpeed: 14,
-    windDirection: 315,
-    pressure: 29.92,
-    rain7d: 1.8,
-  });
-  const [photos, setPhotos] = useState(samplePhotos);
+  const mapRef = useRef<MapView>(null);
+  const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [weather, setWeather] = useState<Weather | null>(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [photos, setPhotos] = useState<string[]>([]);
   const [reportLocation, setReportLocation] = useState('');
   const [reportBirds, setReportBirds] = useState('');
   const [reportNotes, setReportNotes] = useState('');
@@ -63,7 +61,7 @@ export default function App() {
   const [mapType, setMapType] = useState<'hybrid' | 'satellite'>('hybrid');
   const [photoFilter, setPhotoFilter] = useState('24H');
   const [editing, setEditing] = useState(false);
-  const [draftName, setDraftName] = useState('North Marsh Camera');
+  const [draftName, setDraftName] = useState('');
   const [activePhoto, setActivePhoto] = useState<string | null>(null);
   const [journalCount, setJournalCount] = useState(0);
 
@@ -81,12 +79,14 @@ export default function App() {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== 'granted') return;
       const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setRegion({
+      const nextRegion = {
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
         latitudeDelta: 0.18,
         longitudeDelta: 0.18,
-      });
+      };
+      setRegion(nextRegion);
+      mapRef.current?.animateToRegion(nextRegion, 650);
     } catch {
       // Keep the Wisconsin default when location is unavailable.
     }
@@ -102,25 +102,54 @@ export default function App() {
     };
     setWaypoints((current) => [...current, point]);
     setSelectedId(point.id);
+    setDraftName(point.name);
+    setWeather(null);
+    setEditing(true);
   }
 
-  async function refreshWeather() {
-    if (!selected) return;
+  async function refreshWeather(point?: Waypoint) {
+    const target = point ?? selected;
+    if (!target) return;
     try {
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${selected.latitude}&longitude=${selected.longitude}&current=temperature_2m,wind_speed_10m,wind_direction_10m,surface_pressure&daily=rain_sum&past_days=7&forecast_days=1&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto`;
+      setWeatherLoading(true);
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${target.latitude}&longitude=${target.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure&hourly=temperature_2m,wind_speed_10m&daily=rain_sum&past_days=7&forecast_days=2&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto`;
       const response = await fetch(url);
+      if (!response.ok) throw new Error('Weather service unavailable');
       const data = await response.json();
       const rain = (data.daily?.rain_sum ?? []) as number[];
+      const codes: Record<number, string> = { 0: 'Clear', 1: 'Mostly Clear', 2: 'Partly Cloudy', 3: 'Cloudy', 45: 'Fog', 51: 'Drizzle', 61: 'Rain', 71: 'Snow', 80: 'Rain Showers', 95: 'Thunderstorms' };
+      const times = (data.hourly?.time ?? []) as string[];
+      const temps = (data.hourly?.temperature_2m ?? []) as number[];
+      const winds = (data.hourly?.wind_speed_10m ?? []) as number[];
+      const nowIndex = Math.max(0, times.findIndex((time) => new Date(time).getTime() >= Date.now()));
       setWeather({
-        temperature: Number(data.current?.temperature_2m ?? 42),
-        windSpeed: Number(data.current?.wind_speed_10m ?? 14),
-        windDirection: Number(data.current?.wind_direction_10m ?? 315),
-        pressure: Number(data.current?.surface_pressure ?? 1013) * 0.02953,
-        rain7d: rain.slice(-7).reduce((sum, value) => sum + Number(value || 0), 0),
+        temperature: Number(data.current?.temperature_2m ?? 0),
+        windSpeed: Number(data.current?.wind_speed_10m ?? 0),
+        windDirection: Number(data.current?.wind_direction_10m ?? 0),
+        pressure: Number(data.current?.surface_pressure ?? 0) * 0.02953,
+        rain7d: rain.slice(0, 7).reduce((sum, value) => sum + Number(value || 0), 0),
+        humidity: Number(data.current?.relative_humidity_2m ?? 0),
+        condition: codes[Number(data.current?.weather_code)] ?? 'Current Conditions',
+        updatedAt: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        hourly: times.slice(nowIndex, nowIndex + 8).map((time, index) => ({
+          time: new Date(time).toLocaleTimeString([], { hour: 'numeric' }),
+          temp: Number(temps[nowIndex + index] ?? 0),
+          wind: Number(winds[nowIndex + index] ?? 0),
+        })),
       });
     } catch {
       Alert.alert('DuckCast weather', 'Current conditions could not be refreshed.');
+    } finally {
+      setWeatherLoading(false);
     }
+  }
+
+  function moveWaypoint(point: Waypoint, latitude: number, longitude: number) {
+    const moved = { ...point, latitude, longitude };
+    setWaypoints((current) => current.map((item) => item.id === point.id ? moved : item));
+    setSelectedId(point.id);
+    setWeather(null);
+    void refreshWeather(moved);
   }
 
   async function importPhoto() {
@@ -175,13 +204,14 @@ export default function App() {
       <StatusBar style="light" />
       <BrandHeader />
       <View style={styles.body}>
-        {tab === 'Map' && selected && (
+        {tab === 'Map' && (selected ? (
           <ScrollView contentContainerStyle={styles.mapPage} showsVerticalScrollIndicator={false}>
             <View style={styles.mapCard}>
               <MapView
+                ref={mapRef}
                 style={StyleSheet.absoluteFill}
                 mapType={mapType}
-                region={region}
+                initialRegion={region}
                 onRegionChangeComplete={setRegion}
                 showsUserLocation
                 showsCompass={false}
@@ -196,7 +226,9 @@ export default function App() {
                     coordinate={point}
                     title={point.name}
                     pinColor={ORANGE}
-                    onPress={() => setSelectedId(point.id)}
+                    draggable
+                    onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }}
+                    onDragEnd={(event) => moveWaypoint(point, event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
                   />
                 ))}
               </MapView>
@@ -245,7 +277,7 @@ export default function App() {
               </Pressable>
             </View>
 
-            <WeatherPanel weather={weather} onRefresh={refreshWeather} />
+            <WeatherPanel weather={weather} loading={weatherLoading} onRefresh={() => refreshWeather()} />
 
             <View style={styles.cameraSection}>
               <View style={styles.cameraHeader}>
@@ -297,13 +329,36 @@ export default function App() {
               <Text style={styles.chevron}>›</Text>
             </Pressable>
           </ScrollView>
-        )}
+        ) : (
+          <View style={styles.emptyMapWrap}>
+            <MapView
+              ref={mapRef}
+              style={StyleSheet.absoluteFill}
+              mapType={mapType}
+              initialRegion={region}
+              onRegionChangeComplete={setRegion}
+              showsUserLocation
+              showsCompass
+              onLongPress={(event) => addWaypoint(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
+            />
+            <View style={styles.emptyMapTools}>
+              <Pressable style={styles.squareButton} onPress={() => setMapType((current) => current === 'hybrid' ? 'satellite' : 'hybrid')}>
+                <Text style={styles.toolIcon}>▱</Text>
+              </Pressable>
+              <Pressable style={styles.squareButton} onPress={locateUser}><Text style={styles.toolIcon}>➤</Text></Pressable>
+            </View>
+            <View style={styles.cleanSlateCard}>
+              <Text style={styles.cleanSlateTitle}>Build your DuckCast map</Text>
+              <Text style={styles.cleanSlateText}>Pan and zoom anywhere. Long-press the map to create your first waypoint and load live weather for that exact spot.</Text>
+            </View>
+          </View>
+        ))}
 
         {tab === 'Weather' && (
           <ScrollView contentContainerStyle={styles.page}>
             <Text style={styles.eyebrow}>LIVE CONDITIONS</Text>
             <Text style={styles.pageTitle}>Marsh Weather</Text>
-            <WeatherPanel weather={weather} onRefresh={refreshWeather} />
+            <WeatherPanel weather={weather} loading={weatherLoading} onRefresh={() => refreshWeather()} />
             <View style={styles.panel}>
               <Text style={styles.panelTitle}>Waypoint forecast</Text>
               {waypoints.map((point) => (
@@ -421,20 +476,40 @@ function BrandHeader() {
   );
 }
 
-function WeatherPanel({ weather, onRefresh }: { weather: Weather; onRefresh: () => void }) {
+function WeatherPanel({ weather, loading, onRefresh }: { weather: Weather | null; loading: boolean; onRefresh: () => void }) {
+  if (!weather) {
+    return (
+      <Pressable style={styles.weatherPanel} onPress={onRefresh}>
+        <Text style={styles.weatherTitle}>☁  Waypoint Weather</Text>
+        <Text style={styles.weatherEmpty}>{loading ? 'Loading live conditions…' : 'Select a waypoint to load live weather.'}</Text>
+      </Pressable>
+    );
+  }
   return (
-    <Pressable style={styles.weatherPanel} onPress={onRefresh}>
-      <Text style={styles.weatherTitle}>☁  Waypoint Weather</Text>
+    <View style={styles.weatherPanel}>
+      <Pressable style={styles.weatherHeadingRow} onPress={onRefresh}>
+        <Text style={styles.weatherTitle}>☁  Waypoint Weather</Text>
+        <Text style={styles.refreshText}>{loading ? 'Loading…' : `Updated ${weather.updatedAt}  ↻`}</Text>
+      </Pressable>
       <View style={styles.weatherMetrics}>
         <View style={styles.weatherMain}>
           <Text style={styles.temperature}>{weather.temperature.toFixed(0)}°<Text style={styles.degreeF}>F</Text></Text>
-          <Text style={styles.condition}>Mostly Cloudy</Text>
+          <Text style={styles.condition}>{weather.condition}</Text>
         </View>
-        <Metric icon="≋" label="NW" value={`${weather.windSpeed.toFixed(0)} mph`} sub="Gusts 22" />
-        <Metric icon="●" label="7-Day Rain" value={`${weather.rain7d.toFixed(1)} in`} />
-        <Metric icon="◴" label="Pressure" value={`${weather.pressure.toFixed(2)} in`} sub="Rising ↑" />
+        <Metric icon="➤" label={`${weather.windDirection.toFixed(0)}°`} value={`${weather.windSpeed.toFixed(0)} mph`} sub="Wind" />
+        <Metric icon="●" label="7-Day Rain" value={`${weather.rain7d.toFixed(1)} in`} sub={`${weather.humidity.toFixed(0)}% humidity`} />
+        <Metric icon="◴" label="Pressure" value={`${weather.pressure.toFixed(2)} in`} />
       </View>
-    </Pressable>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hourlyRail}>
+        {weather.hourly.map((hour) => (
+          <View style={styles.hourCard} key={hour.time}>
+            <Text style={styles.hourTime}>{hour.time}</Text>
+            <Text style={styles.hourTemp}>{hour.temp.toFixed(0)}°</Text>
+            <Text style={styles.hourWind}>{hour.wind.toFixed(0)} mph</Text>
+          </View>
+        ))}
+      </ScrollView>
+    </View>
   );
 }
 
@@ -482,6 +557,11 @@ const styles = StyleSheet.create({
   dog: { color: '#69776E', fontSize: 22 },
   tagline: { color: '#9CA39D', fontSize: 8, lineHeight: 10, fontWeight: '800', letterSpacing: 1.1 },
   mapPage: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 22, gap: 12 },
+  emptyMapWrap: { flex: 1, backgroundColor: '#14231B' },
+  emptyMapTools: { position: 'absolute', right: 14, top: 14, gap: 9 },
+  cleanSlateCard: { position: 'absolute', left: 15, right: 15, bottom: 18, padding: 16, borderRadius: 15, backgroundColor: 'rgba(8,21,16,0.94)', borderWidth: 1, borderColor: '#536158' },
+  cleanSlateTitle: { color: '#EADCCB', fontFamily: 'Georgia', fontSize: 21, fontWeight: '800' },
+  cleanSlateText: { color: '#A5AEA8', lineHeight: 19, marginTop: 5 },
   mapCard: { height: 285, borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: '#38463F', backgroundColor: '#1A2A20' },
   mapTopRow: { position: 'absolute', top: 10, left: 10, right: 10, flexDirection: 'row', justifyContent: 'space-between' },
   glassButton: { backgroundColor: 'rgba(5,13,9,0.78)', paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12 },
@@ -506,7 +586,15 @@ const styles = StyleSheet.create({
   moreButton: { width: 43, height: 43, borderRadius: 22, borderWidth: 1, borderColor: '#59675E', alignItems: 'center', justifyContent: 'center' },
   moreText: { color: '#D0D2CC', letterSpacing: 2 },
   weatherPanel: { marginHorizontal: 1, backgroundColor: '#13231B', borderWidth: 1, borderColor: '#3A4B42', borderRadius: 16, padding: 13 },
-  weatherTitle: { color: '#E7DAC9', fontSize: 18, fontWeight: '800', marginBottom: 10 },
+  weatherTitle: { color: '#E7DAC9', fontSize: 18, fontWeight: '800' },
+  weatherHeadingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  refreshText: { color: ORANGE, fontSize: 10, fontWeight: '800' },
+  weatherEmpty: { color: '#9FA9A3', paddingVertical: 18, textAlign: 'center' },
+  hourlyRail: { marginTop: 12, borderTopWidth: 1, borderTopColor: '#34463C', paddingTop: 10 },
+  hourCard: { width: 65, alignItems: 'center', paddingVertical: 7, marginRight: 6, borderRadius: 9, backgroundColor: '#0C1A13' },
+  hourTime: { color: '#96A099', fontSize: 10 },
+  hourTemp: { color: '#F1E7D8', fontSize: 17, fontWeight: '800', marginTop: 3 },
+  hourWind: { color: ORANGE, fontSize: 9, marginTop: 2 },
   weatherMetrics: { flexDirection: 'row' },
   weatherMain: { width: '25%', justifyContent: 'center', paddingRight: 7, borderRightWidth: 1, borderRightColor: '#59645E' },
   temperature: { color: '#FFFFFF', fontSize: 37, fontWeight: '800' },
