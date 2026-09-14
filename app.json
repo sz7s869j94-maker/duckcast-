@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "DuckCast",
+    "slug": "duckcast",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.beardedduck.duckcast",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "DuckCast uses your location to show hunting conditions and nearby waypoints.",
+        "NSPhotoLibraryUsageDescription": "DuckCast can attach trail camera and hunt photos to your reports and waypoints."
+      }
+    },
+    "android": {
+      "package": "com.beardedduck.duckcast",
+      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION", "READ_MEDIA_IMAGES"]
+    },
+    "plugins": ["expo-location", "expo-image-picker"]
+  }
+}
