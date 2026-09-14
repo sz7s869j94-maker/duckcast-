@@ -1,0 +1,36 @@
+name: Expo Go Preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/expo-go-preview.yml'
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Expo tunnel support
+        run: npm install --no-save @expo/ngrok
+
+      - name: Start Expo Go tunnel
+        env:
+          CI: '1'
+        run: |
+          echo "Starting DuckCast Expo Go preview..."
+          echo "Keep this workflow running while testing on your phone."
+          npx expo start --tunnel
