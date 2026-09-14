@@ -34,6 +34,7 @@ type Weather = {
 };
 
 const ORANGE = '#EF7C22';
+const DUCK_LOGO_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAMAAADVRocKAAAAflBMVEX////ueCDudyDudiDtdiHtdSDudyHueCHveCHudiHueCLueSLtdiDtdyHteCHteCLveCLveSLveSHueSHvdyDweCHvdyHueiPveiPueSPveSPvdiDveiLvdiHudyLueCPtdyLtdh/weiPweSHueB/sdh7ueiLweiLweSLtdyCX3lX7AAAAAXRSTlMAQObYZgAABJtJREFUaN7tWG1z2zYMduWMYMBKJuTMFjktbZOtaf//HxxeSLu73Tl2TH3YnXC9VlWc5yGABy/0ZrPaaqutttpqTexTt314WA7+NwfeOQC3DLx7fAQAxBDQLUHxuXdugKC2iBMSGhgEXBgcNsdHHBygECCItT9/wB41PIWiLUHPh0dxQLAHbJ8FxUbNMA69uNCWQNWD9gcHzUFbhiJPRudIoZYDoG9I0BnDTsBRLUCIDX3wQBr9IRQCIqbkxtGOQKOPrFXJNYAnCxlRG4KRcXcion2g6P3Tk/ckFMR9ads1ILDAQCC2sZLuR+GAzvUNGHpQ8TDDr9qBT967roUH0ioYHoD2LcX5i6E2UWQC+H0ZBtgTaY/zh6dlCLiwNA+soUUISHsp53j0sEwaCMPxyCoVwS7CwLUWpmQT2Y/34/3XcqA68gHvb0LbrnM+EsXou8MfGiO2MtXwToKnw8GJ8OeZMSOPFvcnKweFwfNqEe7bjIjxnJPWkyeyUyM3ONeDsPFPQafBRxlcBzawMCh01jlAM6FOZBkC0vWE4UOn54BIw1c0IUiCLmQyB4JmQIamOPZ8O3xECiTnTLpApBxsEe17S6xR2/QP4cutDBx2KnM9pbKjaLThDK0aCuXp603wW87rGRRrnIQUh0pAuLPFBW9U6uh06yQLxAldIyXSr3n5F3e4ev3dys6PoRDYASXOSSIV0olxp8AyF1Dnc7wE+q0G3ovoActWGMo/9UlSnYxUhj4auUqWLnvQP3T+hatSA4/g7FcqvtGJA+lEgLJ16euiBLroweazI5q40ZCosRRWRTWelJOhlRAp7aSvku1IlyPP2CStQD+tq6ZQWNz5TdKnNOm6WKLPA2GicwzfTTK9evlgzpUAKFd8LuHEJNkIinpLeZcIXrHSvRJLgiFPOiwOYMluCkIQTgoA1ZRgo4yeC8h/dd2B+yO3NSla5KtRxdCgD9oo1BeCcnJ5IW3kqymOpnDx7NKOSdNmXQGwHFnd351iUm4cSn0Mp+qWmn4nxVU1AhmqvtUbk0s6F0OueS2fkjxz030v/r26mvEkCYtJqmUwTVMKZ8WUzMjvzNOUc3wPX2z09DJLGRgka8aipJFShYYqqvIJ9YW1fLz2UjByKfB5JAyYLJEmpWTPlYAdg2HQn0yzsFyF/neHXGzs8Jy5QMuMNJajAe9EY2SJ0uWafch8mN2V59/wmjnytC1tuhSRFXGyhPN/s/Fap9CX18KXIM0br3s52BA2Ge0KFr/jQue/zLfvHKCb4KtZOy7zgGrVJdJOSJootiNH80PwYs+YUHcFFaRI6QtXK4VjyiR5mpjkmu5zyRBszQqhZIBLauZ+m7O+f7sP3Qwgap8RsX6fOPJMgBgbXYXP9kJasD/k1IDLrOoiKXvy/nUJgk2o9yRaIESKG+s1iRmWINj7eh0el/HAb+tldYyLMDh3KE9vcREGnsvRnmbenqK0xab4Px0+u5JmvnpHvjvx5al/dM2KQr9dqSXwyk1datq1/FKc+/eeT+3tG9436VIZmnz1VG0I0or4zuZ96++pq8ko8H6ZLyZWW2211f6/9g8kVGkZ3tRsggAAAABJRU5ErkJggg==';
 const DEFAULT_REGION: Region = {
   latitude: 44.50,
   longitude: -89.50,
@@ -63,6 +64,7 @@ export default function App() {
   const [mapType, setMapType] = useState<'hybrid' | 'satellite'>('hybrid');
   const [photoFilter, setPhotoFilter] = useState('24H');
   const [editing, setEditing] = useState(false);
+  const [moreMenu, setMoreMenu] = useState(false);
   const [draftName, setDraftName] = useState('');
   const [activePhoto, setActivePhoto] = useState<string | null>(null);
   const [journalCount, setJournalCount] = useState(0);
@@ -74,7 +76,7 @@ export default function App() {
   const [draftColor, setDraftColor] = useState(ORANGE);
 
   const selected = useMemo(
-    () => waypoints.find((point) => point.id === selectedId) ?? waypoints[0],
+    () => waypoints.find((point) => point.id === selectedId),
     [waypoints, selectedId]
   );
 
@@ -183,8 +185,9 @@ export default function App() {
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.85 });
-    if (!result.canceled && result.assets[0]?.uri) {
-      setPhotos((current) => [result.assets[0].uri, ...current]);
+    const importedUri = result.canceled ? undefined : result.assets[0]?.uri;
+    if (importedUri) {
+      setPhotos((current) => [importedUri, ...current]);
     }
   }
 
@@ -205,6 +208,28 @@ export default function App() {
     setSelectedId(remaining[0]?.id ?? '');
     setWeather(null);
     setEditing(false);
+  }
+
+  function confirmDeleteWaypoint() {
+    if (!selected) return;
+    setMoreMenu(false);
+    Alert.alert('Delete waypoint?', `${selected.name} will be removed from your map.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: deleteWaypoint },
+    ]);
+  }
+
+  function closeWaypointDetail() {
+    setSelectedId('');
+    setWeather(null);
+  }
+
+  function centerSelectedWaypoint() {
+    if (!selected) return;
+    const nextRegion = { ...region, latitude: selected.latitude, longitude: selected.longitude };
+    setMoreMenu(false);
+    setRegion(nextRegion);
+    mapRef.current?.animateToRegion(nextRegion, 500);
   }
 
   function togglePrivacy() {
@@ -271,7 +296,7 @@ export default function App() {
               <View style={styles.mapTopRow}>
                 <Pressable
                   style={styles.glassButton}
-                  onPress={() => setRegion({ ...DEFAULT_REGION, latitude: selected.latitude, longitude: selected.longitude })}
+                  onPress={closeWaypointDetail}
                 >
                   <Text style={styles.glassText}>‹  Back</Text>
                 </Pressable>
@@ -301,7 +326,7 @@ export default function App() {
               <Pressable style={styles.editButton} onPress={() => { setDraftName(selected.name); setEditing(true); }}>
                 <Text style={styles.editText}>Edit</Text>
               </Pressable>
-              <Pressable style={styles.moreButton} onPress={togglePrivacy}>
+              <Pressable style={styles.moreButton} onPress={() => setMoreMenu(true)}>
                 <Text style={styles.moreText}>•••</Text>
               </Pressable>
             </View>
@@ -369,7 +394,11 @@ export default function App() {
               showsUserLocation
               showsCompass
               onLongPress={(event) => addWaypoint(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
-            />
+            >
+              {showWaypoints && waypoints.map((point) => (
+                <Marker key={point.id} coordinate={point} title={showLabels ? `${point.type}: ${point.name}` : undefined} pinColor={point.color} draggable onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onDragEnd={(event) => moveWaypoint(point, event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)} />
+              ))}
+            </MapView>
             <View style={styles.emptyMapTools}>
               <Pressable style={[styles.squareButton, styles.actionButton]} onPress={() => setMapControls(true)}>
                 <Text style={styles.toolIcon}>☰</Text>
@@ -423,7 +452,7 @@ export default function App() {
               {waypoints.map((point) => (
                 <Pressable key={point.id} style={styles.listRow} onPress={() => { setSelectedId(point.id); setTab('Map'); }}>
                   <View><Text style={styles.rowTitle}>{point.name}</Text><Text style={styles.subtle}>{point.latitude.toFixed(3)}, {point.longitude.toFixed(3)}</Text></View>
-                  <Text style={styles.rowValue}>{weather.windSpeed.toFixed(0)} mph  ›</Text>
+                  <Text style={styles.rowValue}>{selected?.id === point.id && weather ? `${weather.windSpeed.toFixed(0)} mph` : 'View'}  ›</Text>
                 </Pressable>
               ))}
             </View>
@@ -499,6 +528,20 @@ export default function App() {
         </Pressable>
       </Modal>
 
+      <Modal visible={moreMenu} transparent animationType="fade" onRequestClose={() => setMoreMenu(false)}>
+        <Pressable style={styles.controlBackdrop} onPress={() => setMoreMenu(false)}>
+          <View style={styles.moreMenuCard}>
+            <Text style={styles.mapControlTitle}>{selected?.name}</Text>
+            <Pressable style={styles.controlRow} onPress={() => { if (selected) { setDraftName(selected.name); setDraftType(selected.type); setDraftColor(selected.color); } setMoreMenu(false); setEditing(true); }}>
+              <Text style={styles.rowTitle}>Edit waypoint</Text><Text style={styles.chevron}>›</Text>
+            </Pressable>
+            <Pressable style={styles.controlRow} onPress={centerSelectedWaypoint}><Text style={styles.rowTitle}>Center on map</Text><Text style={styles.chevron}>›</Text></Pressable>
+            <Pressable style={styles.controlRow} onPress={() => { togglePrivacy(); setMoreMenu(false); }}><Text style={styles.rowTitle}>{selected?.private ? 'Make shared' : 'Make private'}</Text><Text style={styles.chevron}>›</Text></Pressable>
+            <Pressable style={styles.controlRow} onPress={confirmDeleteWaypoint}><Text style={styles.deleteText}>Delete waypoint</Text><Text style={styles.deleteText}>›</Text></Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
       <Modal visible={editing} transparent animationType="slide" onRequestClose={() => setEditing(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.sheet}>
@@ -556,7 +599,7 @@ function BrandHeader() {
   return (
     <View style={styles.header}>
       <View style={styles.logoRow}>
-        <Text style={styles.duckMark}>◆</Text>
+        <Image source={{ uri: DUCK_LOGO_URI }} style={styles.duckLogo} resizeMode="contain" />
         <View>
           <Text style={styles.brand}>DuckCast</Text>
           <Text style={styles.byline}>BY BEARDED DUCK</Text>
@@ -571,6 +614,8 @@ function BrandHeader() {
 }
 
 function WeatherPanel({ weather, loading, onRefresh }: { weather: Weather | null; loading: boolean; onRefresh: () => void }) {
+  const [range, setRange] = useState<'Hourly' | '3 Day' | '7 Day'>('Hourly');
+  const [selectedDay, setSelectedDay] = useState(0);
   if (!weather) {
     return (
       <Pressable style={styles.weatherPanel} onPress={onRefresh}>
@@ -594,15 +639,27 @@ function WeatherPanel({ weather, loading, onRefresh }: { weather: Weather | null
         <Metric icon="●" label="7-Day Rain" value={`${weather.rain7d.toFixed(1)} in`} sub={`${weather.humidity.toFixed(0)}% humidity`} />
         <Metric icon="◴" label="Pressure" value={`${weather.pressure.toFixed(2)} in`} />
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hourlyRail}>
-        {weather.hourly.map((hour) => (
-          <View style={styles.hourCard} key={hour.time}>
-            <Text style={styles.hourTime}>{hour.time}</Text>
-            <Text style={styles.hourTemp}>{hour.temp.toFixed(0)}°</Text>
-            <Text style={styles.hourWind}>{hour.wind.toFixed(0)} mph</Text>
-          </View>
+      <View style={styles.compactForecastTabs}>
+        {(['Hourly', '3 Day', '7 Day'] as const).map((item) => (
+          <Pressable key={item} style={[styles.compactForecastTab, range === item && styles.compactForecastTabActive]} onPress={() => { setRange(item); setSelectedDay(0); }}>
+            <Text style={[styles.compactForecastText, range === item && styles.compactForecastTextActive]}>{item}</Text>
+          </Pressable>
         ))}
-      </ScrollView>
+      </View>
+      {range === 'Hourly' ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hourlyRail}>
+          {weather.hourly.map((hour) => <View style={styles.hourCard} key={hour.time}><Text style={styles.hourTime}>{hour.time}</Text><Text style={styles.hourTemp}>{hour.temp.toFixed(0)}°</Text><Text style={styles.hourWind}>{hour.wind.toFixed(0)} mph</Text></View>)}
+        </ScrollView>
+      ) : (
+        <View style={styles.dayForecastWrap}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {weather.daily.slice(0, range === '3 Day' ? 3 : 7).map((day, index) => (
+              <Pressable key={`${day.date}-${index}`} style={[styles.dayCard, selectedDay === index && styles.dayCardActive]} onPress={() => setSelectedDay(index)}><Text style={styles.dayCardName}>{day.date}</Text><Text style={styles.dayCardTemp}>{day.high.toFixed(0)}°</Text><Text style={styles.dayCardLow}>{day.low.toFixed(0)}°</Text></Pressable>
+            ))}
+          </ScrollView>
+          {!!weather.daily[selectedDay] && <View style={styles.selectedDayDetails}><Text style={styles.selectedDayTitle}>{weather.daily[selectedDay].date} forecast</Text><Text style={styles.selectedDayStat}>Rain {weather.daily[selectedDay].rainChance.toFixed(0)}% · {weather.daily[selectedDay].rain.toFixed(2)} in</Text><Text style={styles.selectedDayStat}>Wind up to {weather.daily[selectedDay].wind.toFixed(0)} mph</Text></View>}
+        </View>
+      )}
     </View>
   );
 }
@@ -644,7 +701,7 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   header: { height: 96, paddingHorizontal: 18, paddingTop: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#0A1A13', borderBottomWidth: 1, borderBottomColor: '#23372E' },
   logoRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  duckMark: { color: ORANGE, fontSize: 31, transform: [{ rotate: '45deg' }] },
+  duckLogo: { width: 42, height: 42 },
   brand: { color: '#EADCCB', fontSize: 31, fontWeight: '800', fontFamily: 'Georgia', letterSpacing: -1.2 },
   byline: { color: '#B9B4AA', fontSize: 10, fontWeight: '800', letterSpacing: 3.2, marginTop: 1 },
   dogBlock: { flexDirection: 'row', alignItems: 'center', gap: 7 },
@@ -680,12 +737,27 @@ const styles = StyleSheet.create({
   editText: { color: '#D0D2CC', fontSize: 15 },
   moreButton: { width: 43, height: 43, borderRadius: 22, borderWidth: 1, borderColor: '#59675E', alignItems: 'center', justifyContent: 'center' },
   moreText: { color: '#D0D2CC', letterSpacing: 2 },
+  moreMenuCard: { position: 'absolute', top: 190, right: 18, width: 245, backgroundColor: '#0E1D15', borderRadius: 17, borderWidth: 1, borderColor: '#506158', padding: 15 },
   weatherPanel: { marginHorizontal: 1, backgroundColor: '#13231B', borderWidth: 1, borderColor: '#3A4B42', borderRadius: 16, padding: 13 },
   weatherTitle: { color: '#E7DAC9', fontSize: 18, fontWeight: '800' },
   weatherHeadingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   refreshText: { color: ORANGE, fontSize: 10, fontWeight: '800' },
   weatherEmpty: { color: '#9FA9A3', paddingVertical: 18, textAlign: 'center' },
   hourlyRail: { marginTop: 12, borderTopWidth: 1, borderTopColor: '#34463C', paddingTop: 10 },
+  compactForecastTabs: { flexDirection: 'row', gap: 6, marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#34463C' },
+  compactForecastTab: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#34463C' },
+  compactForecastTabActive: { backgroundColor: ORANGE, borderColor: ORANGE },
+  compactForecastText: { color: '#9FA9A3', fontSize: 11, fontWeight: '800' },
+  compactForecastTextActive: { color: '#FFFFFF' },
+  dayForecastWrap: { marginTop: 10 },
+  dayCard: { width: 62, marginRight: 7, paddingVertical: 8, borderRadius: 9, alignItems: 'center', backgroundColor: '#0C1A13', borderWidth: 1, borderColor: '#2F4237' },
+  dayCardActive: { borderColor: ORANGE, backgroundColor: '#1A2A20' },
+  dayCardName: { color: '#AAB3AD', fontSize: 10, fontWeight: '800' },
+  dayCardTemp: { color: '#F1E7D8', fontSize: 18, fontWeight: '900', marginTop: 3 },
+  dayCardLow: { color: '#849087', fontSize: 11 },
+  selectedDayDetails: { marginTop: 9, padding: 10, borderRadius: 9, backgroundColor: '#0C1A13', flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 5 },
+  selectedDayTitle: { width: '100%', color: '#EADCCB', fontWeight: '900' },
+  selectedDayStat: { color: '#AAB3AD', fontSize: 11 },
   hourCard: { width: 65, alignItems: 'center', paddingVertical: 7, marginRight: 6, borderRadius: 9, backgroundColor: '#0C1A13' },
   hourTime: { color: '#96A099', fontSize: 10 },
   hourTemp: { color: '#F1E7D8', fontSize: 17, fontWeight: '800', marginTop: 3 },
