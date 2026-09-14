@@ -7,6 +7,14 @@ on:
       - main
     paths:
       - '.github/workflows/expo-go-preview.yml'
+      - 'package.json'
+      - 'app.json'
+      - 'App.tsx'
+      - 'src/**'
+
+concurrency:
+  group: duckcast-expo-preview
+  cancel-in-progress: true
 
 jobs:
   preview:
@@ -22,7 +30,10 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+        run: |
+          npm install
+          npx expo install --fix
+          npx expo-doctor@latest
 
       - name: Install Cloudflare tunnel
         run: |
