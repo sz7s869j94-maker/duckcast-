@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Image,
+  Modal,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -59,6 +60,12 @@ export default function App() {
   const [reportBirds, setReportBirds] = useState('');
   const [reportNotes, setReportNotes] = useState('');
   const [reports, setReports] = useState<Report[]>([]);
+  const [mapType, setMapType] = useState<'hybrid' | 'satellite'>('hybrid');
+  const [photoFilter, setPhotoFilter] = useState('24H');
+  const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState('North Marsh Camera');
+  const [activePhoto, setActivePhoto] = useState<string | null>(null);
+  const [journalCount, setJournalCount] = useState(0);
 
   const selected = useMemo(
     () => waypoints.find((point) => point.id === selectedId) ?? waypoints[0],
@@ -128,6 +135,25 @@ export default function App() {
     }
   }
 
+  function saveWaypointName() {
+    const name = draftName.trim();
+    if (!name || !selected) return;
+    setWaypoints((current) => current.map((point) => point.id === selected.id ? { ...point, name } : point));
+    setEditing(false);
+  }
+
+  function togglePrivacy() {
+    if (!selected) return;
+    setWaypoints((current) => current.map((point) =>
+      point.id === selected.id ? { ...point, private: !point.private } : point
+    ));
+  }
+
+  function logHunt() {
+    setJournalCount((count) => count + 1);
+    Alert.alert('Hunt logged', 'Your waypoint, time and weather were added to the journal.');
+  }
+
   function publishReport() {
     if (!reportLocation.trim() || !reportBirds.trim()) {
       Alert.alert('Add a location and bird count');
@@ -154,7 +180,7 @@ export default function App() {
             <View style={styles.mapCard}>
               <MapView
                 style={StyleSheet.absoluteFill}
-                mapType="hybrid"
+                mapType={mapType}
                 region={region}
                 onRegionChangeComplete={setRegion}
                 showsUserLocation
@@ -175,9 +201,19 @@ export default function App() {
                 ))}
               </MapView>
               <View style={styles.mapTopRow}>
-                <View style={styles.glassButton}><Text style={styles.glassText}>‹  Back</Text></View>
+                <Pressable
+                  style={styles.glassButton}
+                  onPress={() => setRegion({ ...DEFAULT_REGION, latitude: selected.latitude, longitude: selected.longitude })}
+                >
+                  <Text style={styles.glassText}>‹  Back</Text>
+                </Pressable>
                 <View style={styles.mapTools}>
-                  <View style={styles.squareButton}><Text style={styles.toolIcon}>▱</Text></View>
+                  <Pressable
+                    style={styles.squareButton}
+                    onPress={() => setMapType((current) => current === 'hybrid' ? 'satellite' : 'hybrid')}
+                  >
+                    <Text style={styles.toolIcon}>▱</Text>
+                  </Pressable>
                   <Pressable style={styles.squareButton} onPress={locateUser}>
                     <Text style={styles.toolIcon}>➤</Text>
                   </Pressable>
@@ -188,19 +224,25 @@ export default function App() {
                 <Text style={styles.markerText}>{selected.name}</Text>
               </View>
               <View style={styles.scale}><Text style={styles.scaleText}>0      500      1,000 ft</Text></View>
-              <View style={styles.privatePill}><Text style={styles.privateText}>▣  Private</Text></View>
+              <Pressable style={styles.privatePill} onPress={togglePrivacy}>
+                <Text style={styles.privateText}>▣  {selected.private ? 'Private' : 'Shared'}</Text>
+              </Pressable>
             </View>
 
             <View style={styles.titleRow}>
               <View style={styles.flex}>
                 <Text style={styles.locationTitle}>{selected.name}</Text>
-                <Text style={styles.privateLine}>▣  Private Waypoint</Text>
+                <Text style={styles.privateLine}>▣  {selected.private ? 'Private Waypoint' : 'Shared Waypoint'}</Text>
                 <Text style={styles.coordinates}>
                   {selected.latitude.toFixed(4)}° N, {Math.abs(selected.longitude).toFixed(4)}° W
                 </Text>
               </View>
-              <Pressable style={styles.editButton}><Text style={styles.editText}>Edit</Text></Pressable>
-              <Pressable style={styles.moreButton}><Text style={styles.moreText}>•••</Text></Pressable>
+              <Pressable style={styles.editButton} onPress={() => { setDraftName(selected.name); setEditing(true); }}>
+                <Text style={styles.editText}>Edit</Text>
+              </Pressable>
+              <Pressable style={styles.moreButton} onPress={togglePrivacy}>
+                <Text style={styles.moreText}>•••</Text>
+              </Pressable>
             </View>
 
             <WeatherPanel weather={weather} onRefresh={refreshWeather} />
@@ -219,15 +261,19 @@ export default function App() {
                 </Pressable>
               </View>
               <View style={styles.filters}>
-                {['24H', '7D', '30D', 'All'].map((filter, index) => (
-                  <View key={filter} style={[styles.filter, index === 0 && styles.filterActive]}>
-                    <Text style={[styles.filterText, index === 0 && styles.filterTextActive]}>{filter}</Text>
-                  </View>
+                {['24H', '7D', '30D', 'All'].map((filter) => (
+                  <Pressable
+                    key={filter}
+                    style={[styles.filter, photoFilter === filter && styles.filterActive]}
+                    onPress={() => setPhotoFilter(filter)}
+                  >
+                    <Text style={[styles.filterText, photoFilter === filter && styles.filterTextActive]}>{filter}</Text>
+                  </Pressable>
                 ))}
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {photos.map((uri, index) => (
-                  <View style={styles.photoCard} key={uri + index}>
+                  <Pressable style={styles.photoCard} key={uri + index} onPress={() => setActivePhoto(uri)}>
                     <Image source={{ uri }} style={styles.photo} />
                     <View style={styles.photoShade}>
                       <Text style={styles.photoDate}>Jan 14 · {index === 2 ? '4:58 PM' : `7:${12 + index * 24} AM`}</Text>
@@ -236,12 +282,12 @@ export default function App() {
                       <Text style={styles.photoSpecies}>{index === 1 ? 'Canada Goose' : 'Mallard'}</Text>
                       <Text style={styles.photoBirds}>{18 + index * 3} birds</Text>
                     </View>
-                  </View>
+                  </Pressable>
                 ))}
               </ScrollView>
             </View>
 
-            <View style={styles.insight}>
+            <Pressable style={styles.insight} onPress={() => Alert.alert('DuckCast Insight', 'Northwest winds between 6–9 AM produced the most camera activity at this waypoint.')}>
               <View style={styles.chartIcon}><Text style={styles.chartText}>▮▮▮</Text></View>
               <View style={styles.flex}>
                 <Text style={styles.insightTitle}>DuckCast Insight</Text>
@@ -249,7 +295,7 @@ export default function App() {
                 <Text style={styles.insightSub}>Based on recent trail-camera activity at this location.</Text>
               </View>
               <Text style={styles.chevron}>›</Text>
-            </View>
+            </Pressable>
           </ScrollView>
         )}
 
@@ -295,9 +341,9 @@ export default function App() {
             <Text style={styles.eyebrow}>YOUR SEASON</Text>
             <Text style={styles.pageTitle}>Hunt Journal</Text>
             <View style={styles.heroPanel}>
-              <Text style={styles.heroNumber}>0</Text>
+              <Text style={styles.heroNumber}>{journalCount}</Text>
               <Text style={styles.heroLabel}>hunts logged this season</Text>
-              <Pressable style={styles.primaryButton}><Text style={styles.primaryButtonText}>＋ Log a Hunt</Text></Pressable>
+              <Pressable style={styles.primaryButton} onPress={logHunt}><Text style={styles.primaryButtonText}>＋ Log a Hunt</Text></Pressable>
             </View>
             <View style={styles.panel}><Text style={styles.panelTitle}>Your journal is ready</Text><Text style={styles.subtle}>Save weather, location, birds seen, harvest details, dog work and photos after each hunt.</Text></View>
           </ScrollView>
@@ -313,11 +359,45 @@ export default function App() {
               <Text style={styles.subtle}>Wisconsin · Arkansas</Text>
             </View>
             {['Saved Waypoints', 'Tactacam Connections', 'Privacy & Sharing', 'Weather Settings'].map((label) => (
-              <View style={styles.settingsRow} key={label}><Text style={styles.rowTitle}>{label}</Text><Text style={styles.chevron}>›</Text></View>
+              <Pressable style={styles.settingsRow} key={label} onPress={() => Alert.alert(label, 'This DuckCast setting is ready for account connection.')}>
+                <Text style={styles.rowTitle}>{label}</Text><Text style={styles.chevron}>›</Text>
+              </Pressable>
             ))}
           </ScrollView>
         )}
       </View>
+
+      <Modal visible={editing} transparent animationType="slide" onRequestClose={() => setEditing(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Edit Waypoint</Text>
+            <Text style={styles.sheetLabel}>WAYPOINT NAME</Text>
+            <TextInput style={styles.input} value={draftName} onChangeText={setDraftName} autoFocus />
+            <Pressable style={styles.privacyRow} onPress={togglePrivacy}>
+              <View>
+                <Text style={styles.rowTitle}>{selected?.private ? 'Private waypoint' : 'Shared waypoint'}</Text>
+                <Text style={styles.subtle}>Tap to change who can see this location.</Text>
+              </View>
+              <Text style={styles.privacyValue}>{selected?.private ? 'PRIVATE' : 'SHARED'}</Text>
+            </Pressable>
+            <Pressable style={styles.primaryButton} onPress={saveWaypointName}>
+              <Text style={styles.primaryButtonText}>Save Changes</Text>
+            </Pressable>
+            <Pressable style={styles.cancelButton} onPress={() => setEditing(false)}>
+              <Text style={styles.cancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={!!activePhoto} transparent animationType="fade" onRequestClose={() => setActivePhoto(null)}>
+        <Pressable style={styles.photoModal} onPress={() => setActivePhoto(null)}>
+          {!!activePhoto && <Image source={{ uri: activePhoto }} style={styles.fullPhoto} resizeMode="contain" />}
+          <View style={styles.closePhoto}><Text style={styles.closePhotoText}>×</Text></View>
+        </Pressable>
+      </Modal>
+
       <BottomTabs active={tab} onChange={setTab} />
     </SafeAreaView>
   );
@@ -396,7 +476,7 @@ const styles = StyleSheet.create({
   header: { height: 96, paddingHorizontal: 18, paddingTop: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#0A1A13', borderBottomWidth: 1, borderBottomColor: '#23372E' },
   logoRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   duckMark: { color: ORANGE, fontSize: 31, transform: [{ rotate: '45deg' }] },
-  brand: { color: '#EADCCB', fontSize: 31, fontWeight: '800', letterSpacing: -1.2 },
+  brand: { color: '#EADCCB', fontSize: 31, fontWeight: '800', fontFamily: 'Georgia', letterSpacing: -1.2 },
   byline: { color: '#B9B4AA', fontSize: 10, fontWeight: '800', letterSpacing: 3.2, marginTop: 1 },
   dogBlock: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   dog: { color: '#69776E', fontSize: 22 },
@@ -418,7 +498,7 @@ const styles = StyleSheet.create({
   privatePill: { position: 'absolute', right: 12, bottom: 11, backgroundColor: 'rgba(5,13,9,0.82)', borderRadius: 11, paddingHorizontal: 11, paddingVertical: 8 },
   privateText: { color: '#FFFFFF', fontWeight: '800' },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 4 },
-  locationTitle: { color: '#EADCCB', fontSize: 29, lineHeight: 34, fontWeight: '800', letterSpacing: -0.8 },
+  locationTitle: { color: '#EADCCB', fontSize: 29, lineHeight: 34, fontWeight: '800', fontFamily: 'Georgia', letterSpacing: -0.8 },
   privateLine: { color: '#E9E5DD', fontSize: 14, marginTop: 2 },
   coordinates: { color: '#8D9991', marginTop: 5, fontSize: 13 },
   editButton: { borderWidth: 1, borderColor: '#69756D', borderRadius: 13, paddingHorizontal: 18, paddingVertical: 11 },
@@ -471,7 +551,7 @@ const styles = StyleSheet.create({
   activeText: { color: ORANGE },
   page: { padding: 16, paddingBottom: 35, gap: 13 },
   eyebrow: { color: ORANGE, fontWeight: '900', letterSpacing: 2, fontSize: 10 },
-  pageTitle: { color: '#EADCCB', fontWeight: '800', fontSize: 34, letterSpacing: -1 },
+  pageTitle: { color: '#EADCCB', fontWeight: '800', fontFamily: 'Georgia', fontSize: 34, letterSpacing: -1 },
   panel: { backgroundColor: '#122219', borderWidth: 1, borderColor: '#33463B', borderRadius: 16, padding: 15, gap: 10 },
   panelTitle: { color: '#EADCCB', fontWeight: '800', fontSize: 18 },
   listRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: '#2C3C33' },
@@ -491,4 +571,17 @@ const styles = StyleSheet.create({
   avatarText: { color: '#0B1710', fontSize: 28, fontWeight: '900' },
   profileName: { color: '#EADCCB', fontSize: 24, fontWeight: '800' },
   settingsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#122219', borderBottomWidth: 1, borderBottomColor: '#33463B', padding: 16 },
+  modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.68)' },
+  sheet: { backgroundColor: '#0E1D15', borderTopLeftRadius: 24, borderTopRightRadius: 24, borderWidth: 1, borderColor: '#3A4B41', padding: 20, paddingBottom: 34, gap: 12 },
+  sheetHandle: { width: 46, height: 5, borderRadius: 3, backgroundColor: '#536158', alignSelf: 'center', marginBottom: 5 },
+  sheetTitle: { color: '#EADCCB', fontFamily: 'Georgia', fontWeight: '800', fontSize: 28 },
+  sheetLabel: { color: ORANGE, fontSize: 10, fontWeight: '900', letterSpacing: 1.6, marginTop: 4 },
+  privacyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#13231B', borderWidth: 1, borderColor: '#34463B', borderRadius: 12, padding: 13 },
+  privacyValue: { color: ORANGE, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  cancelButton: { paddingVertical: 12, alignItems: 'center' },
+  cancelText: { color: '#A9B1AB', fontWeight: '700' },
+  photoModal: { flex: 1, backgroundColor: 'rgba(0,0,0,0.96)', alignItems: 'center', justifyContent: 'center' },
+  fullPhoto: { width: '100%', height: '78%' },
+  closePhoto: { position: 'absolute', top: 54, right: 20, width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(18,35,27,0.9)', alignItems: 'center', justifyContent: 'center' },
+  closePhotoText: { color: '#FFFFFF', fontSize: 30, lineHeight: 32 },
 });
