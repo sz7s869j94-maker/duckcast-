@@ -83,6 +83,7 @@ export default function App() {
   const [showWind, setShowWind] = useState(false);
   const [radarUrl, setRadarUrl] = useState('');
   const [radarTime, setRadarTime] = useState('');
+  const [radarRefreshMinutes, setRadarRefreshMinutes] = useState<15 | 30>(15);
   const [waypointWind, setWaypointWind] = useState<Record<string, WindReading>>({});
   const [forecastRange, setForecastRange] = useState<'Hourly' | '3-Day' | '7-Day'>('Hourly');
   const [draftType, setDraftType] = useState<WaypointType>('Hunt Spot');
@@ -102,8 +103,11 @@ export default function App() {
   }, [selectedId]);
 
   useEffect(() => {
-    if (showRadar) void refreshRadar();
-  }, [showRadar]);
+    if (!showRadar) return;
+    void refreshRadar();
+    const timer = setInterval(() => void refreshRadar(), radarRefreshMinutes * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [showRadar, radarRefreshMinutes]);
 
   useEffect(() => {
     if (showWind && waypoints.length) void refreshWaypointWind();
@@ -333,7 +337,7 @@ export default function App() {
                   event.nativeEvent.coordinate.longitude
                 )}
               >
-                {showRadar && !!radarUrl && <UrlTile urlTemplate={radarUrl} maximumZ={12} opacity={0.68} zIndex={2} />}
+                {showRadar && !!radarUrl && <UrlTile urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={20} opacity={0.68} zIndex={2} tileSize={256} />}
                 {showWaypoints && waypoints.map((point) => (
                   <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={showLabels} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
                 ))}
@@ -441,7 +445,7 @@ export default function App() {
               showsCompass
               onLongPress={(event) => addWaypoint(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
             >
-              {showRadar && !!radarUrl && <UrlTile urlTemplate={radarUrl} maximumZ={12} opacity={0.68} zIndex={2} />}
+              {showRadar && !!radarUrl && <UrlTile urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={20} opacity={0.68} zIndex={2} tileSize={256} />}
               {showWaypoints && waypoints.map((point) => (
                 <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={showLabels} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
               ))}
@@ -568,6 +572,7 @@ export default function App() {
             <Pressable style={styles.controlRow} onPress={() => setShowRadar((value) => !value)}>
               <View><Text style={styles.rowTitle}>Precipitation Radar</Text><Text style={styles.controlSub}>Latest live radar frame</Text></View><Text style={styles.controlValue}>{showRadar ? 'ON' : 'OFF'}</Text>
             </Pressable>
+            {showRadar && <View style={styles.radarCycleRow}><Text style={styles.rowTitle}>Radar Refresh</Text><View style={styles.cycleButtons}>{([15, 30] as const).map((minutes) => <Pressable key={minutes} style={[styles.cycleButton, radarRefreshMinutes === minutes && styles.cycleButtonActive]} onPress={() => setRadarRefreshMinutes(minutes)}><Text style={[styles.cycleButtonText, radarRefreshMinutes === minutes && styles.cycleButtonTextActive]}>{minutes} min</Text></Pressable>)}</View></View>}
             <Pressable style={styles.controlRow} onPress={() => setShowWind((value) => !value)}>
               <View><Text style={styles.rowTitle}>Waypoint Wind</Text><Text style={styles.controlSub}>Compass + speed at each pin</Text></View><Text style={styles.controlValue}>{showWind ? 'ON' : 'OFF'}</Text>
             </Pressable>
@@ -909,6 +914,12 @@ const styles = StyleSheet.create({
   controlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 47, borderBottomWidth: 1, borderBottomColor: '#293A31' },
   controlValue: { color: ORANGE, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
   controlSub: { color: '#7F8C84', fontSize: 9, marginTop: 2 },
+  radarCycleRow: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#293A31' },
+  cycleButtons: { flexDirection: 'row', gap: 5 },
+  cycleButton: { paddingHorizontal: 9, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: '#405047' },
+  cycleButtonActive: { backgroundColor: ORANGE, borderColor: ORANGE },
+  cycleButtonText: { color: '#A9B1AB', fontSize: 9, fontWeight: '900' },
+  cycleButtonTextActive: { color: '#FFFFFF' },
   controlHint: { color: '#7F8C84', fontSize: 10, marginTop: 11, lineHeight: 15 },
   optionWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   typeOption: { paddingHorizontal: 11, paddingVertical: 9, borderRadius: 18, borderWidth: 1, borderColor: '#3A4B41' },
