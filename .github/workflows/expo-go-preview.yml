@@ -86,5 +86,12 @@ jobs:
           echo "" >> "${GITHUB_STEP_SUMMARY}"
           echo "[Open DuckCast in Expo Go](${EXPO_GO_URL})" >> "${GITHUB_STEP_SUMMARY}"
 
+          echo "${EXPO_GO_URL}" > expo-go-url.txt
+          git config user.name "DuckCast Preview Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add expo-go-url.txt
+          git commit -m "Update live Expo Go preview link"
+          git push
+
           export EXPO_PACKAGER_PROXY_URL="${TUNNEL_URL}"
           npx expo start --localhost --port 8081
