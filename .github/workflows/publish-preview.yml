@@ -7,6 +7,10 @@ on:
       - main
     paths:
       - '.github/workflows/publish-preview.yml'
+      - 'package.json'
+      - 'app.json'
+      - 'App.tsx'
+      - 'src/**'
 
 jobs:
   publish:
