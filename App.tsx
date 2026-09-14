@@ -82,6 +82,10 @@ export default function App() {
     void locateUser();
   }, []);
 
+  useEffect(() => {
+    if (selected) void refreshWeather(selected);
+  }, [selectedId]);
+
   async function locateUser() {
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
@@ -187,7 +191,19 @@ export default function App() {
   function saveWaypointName() {
     const name = draftName.trim();
     if (!name || !selected) return;
-    setWaypoints((current) => current.map((point) => point.id === selected.id ? { ...point, name, type: draftType, color: draftColor } : point));
+    const updated = { ...selected, name, type: draftType, color: draftColor };
+    setWaypoints((current) => current.map((point) => point.id === selected.id ? updated : point));
+    setEditing(false);
+    setWeather(null);
+    void refreshWeather(updated);
+  }
+
+  function deleteWaypoint() {
+    if (!selected) return;
+    const remaining = waypoints.filter((point) => point.id !== selected.id);
+    setWaypoints(remaining);
+    setSelectedId(remaining[0]?.id ?? '');
+    setWeather(null);
     setEditing(false);
   }
 
@@ -267,10 +283,6 @@ export default function App() {
                     <Text style={styles.toolIcon}>➤</Text>
                   </Pressable>
                 </View>
-              </View>
-              <View style={styles.markerLabel}>
-                <View style={styles.cameraPin}><Text style={styles.cameraPinText}>●</Text></View>
-                <Text style={styles.markerText}>{selected.name}</Text>
               </View>
               <View style={styles.scale}><Text style={styles.scaleText}>0      500      1,000 ft</Text></View>
               <Pressable style={styles.privatePill} onPress={togglePrivacy}>
@@ -517,6 +529,9 @@ export default function App() {
             </Pressable>
             <Pressable style={styles.primaryButton} onPress={saveWaypointName}>
               <Text style={styles.primaryButtonText}>Save Changes</Text>
+            </Pressable>
+            <Pressable style={styles.deleteButton} onPress={deleteWaypoint}>
+              <Text style={styles.deleteText}>Delete Waypoint</Text>
             </Pressable>
             <Pressable style={styles.cancelButton} onPress={() => setEditing(false)}>
               <Text style={styles.cancelText}>Cancel</Text>
@@ -775,6 +790,8 @@ const styles = StyleSheet.create({
   sheetLabel: { color: ORANGE, fontSize: 10, fontWeight: '900', letterSpacing: 1.6, marginTop: 4 },
   privacyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#13231B', borderWidth: 1, borderColor: '#34463B', borderRadius: 12, padding: 13 },
   privacyValue: { color: ORANGE, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  deleteButton: { paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: '#7A3D38', borderRadius: 11 },
+  deleteText: { color: '#E2786E', fontWeight: '800' },
   cancelButton: { paddingVertical: 12, alignItems: 'center' },
   cancelText: { color: '#A9B1AB', fontWeight: '700' },
   photoModal: { flex: 1, backgroundColor: 'rgba(0,0,0,0.96)', alignItems: 'center', justifyContent: 'center' },
