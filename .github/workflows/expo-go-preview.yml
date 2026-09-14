@@ -76,6 +76,21 @@ jobs:
             exit 1
           fi
 
+          export EXPO_PACKAGER_PROXY_URL="${TUNNEL_URL}"
+          npx expo start --localhost --port 8081 > "${RUNNER_TEMP}/expo.log" 2>&1 &
+          EXPO_PID=$!
+          for attempt in {1..45}; do
+            if curl --fail --silent http://127.0.0.1:8081 >/dev/null; then
+              break
+            fi
+            if ! kill -0 "${EXPO_PID}" 2>/dev/null; then
+              cat "${RUNNER_TEMP}/expo.log"
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:8081 >/dev/null
+
           EXPO_GO_URL="exp://${TUNNEL_URL#https://}"
           echo ""
           echo "============================================================"
@@ -96,5 +111,4 @@ jobs:
           git commit -m "Update live Expo Go preview link"
           git push
 
-          export EXPO_PACKAGER_PROXY_URL="${TUNNEL_URL}"
-          npx expo start --localhost --port 8081
+          wait "${EXPO_PID}"
