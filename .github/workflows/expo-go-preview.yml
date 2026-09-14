@@ -19,18 +19,62 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
+          cache: npm
 
       - name: Install dependencies
         run: npm install
 
-      - name: Install Expo tunnel support
-        run: npm install --no-save @expo/ngrok
+      - name: Install Cloudflare tunnel
+        run: |
+          curl --fail --location --silent --show-error \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            --output "${RUNNER_TEMP}/cloudflared"
+          chmod +x "${RUNNER_TEMP}/cloudflared"
 
-      - name: Start Expo Go tunnel
+      - name: Start Expo Go preview
         env:
           CI: '1'
         run: |
-          echo "Starting DuckCast Expo Go preview..."
-          echo "Keep this workflow running while testing on your phone."
-          npx expo start --tunnel
+          set -euo pipefail
+
+          echo "Starting the free Cloudflare tunnel..."
+          "${RUNNER_TEMP}/cloudflared" tunnel \
+            --url http://127.0.0.1:8081 \
+            --no-autoupdate > "${RUNNER_TEMP}/cloudflared.log" 2>&1 &
+          CLOUDFLARED_PID=$!
+
+          TUNNEL_URL=""
+          for attempt in {1..30}; do
+            TUNNEL_URL=$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' "${RUNNER_TEMP}/cloudflared.log" | head -n 1 || true)
+            if [ -n "${TUNNEL_URL}" ]; then
+              break
+            fi
+            if ! kill -0 "${CLOUDFLARED_PID}" 2>/dev/null; then
+              cat "${RUNNER_TEMP}/cloudflared.log"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          if [ -z "${TUNNEL_URL}" ]; then
+            cat "${RUNNER_TEMP}/cloudflared.log"
+            echo "Cloudflare did not provide a tunnel URL."
+            exit 1
+          fi
+
+          EXPO_GO_URL="exp://${TUNNEL_URL#https://}"
+          echo ""
+          echo "============================================================"
+          echo "DUCKCAST EXPO GO LINK: ${EXPO_GO_URL}"
+          echo "Open this link on the iPhone with Expo Go installed."
+          echo "Keep this workflow running while testing."
+          echo "============================================================"
+          echo ""
+          echo "### DuckCast Expo Go preview" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Open this on the iPhone while the workflow is running:" >> "${GITHUB_STEP_SUMMARY}"
+          echo "" >> "${GITHUB_STEP_SUMMARY}"
+          echo "[Open DuckCast in Expo Go](${EXPO_GO_URL})" >> "${GITHUB_STEP_SUMMARY}"
+
+          export EXPO_PACKAGER_PROXY_URL="${TUNNEL_URL}"
+          npx expo start --localhost --port 8081
