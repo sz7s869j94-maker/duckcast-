@@ -2,6 +2,7 @@
   "expo": {
     "name": "DuckCast",
     "slug": "duckcast",
+    "owner": "jflaherty26",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -17,6 +18,11 @@
       "package": "com.beardedduck.duckcast",
       "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION", "READ_MEDIA_IMAGES"]
     },
-    "plugins": ["expo-location", "expo-image-picker"]
+    "plugins": ["expo-location", "expo-image-picker"],
+    "extra": {
+      "eas": {
+        "projectId": "6a411f68-fd2b-44ee-a918-34bb5dcd169d"
+      }
+    }
   }
 }
