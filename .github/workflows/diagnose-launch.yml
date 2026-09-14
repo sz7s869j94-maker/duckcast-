@@ -1,0 +1,33 @@
+name: Diagnose DuckCast Launch
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/diagnose-launch.yml'
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install and align Expo SDK
+        run: |
+          npm install
+          npx expo install --fix
+          npx expo-doctor@latest
+
+      - name: Compile iPhone bundle
+        env:
+          CI: '1'
+        run: npx expo export --platform ios --output-dir dist-diagnostic
