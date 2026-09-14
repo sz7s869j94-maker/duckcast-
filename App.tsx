@@ -43,6 +43,13 @@ type Weather = {
 };
 
 const ORANGE = '#EF7C22';
+const WAYPOINT_ICONS: Record<WaypointType, string> = {
+  'Hunt Spot': '🦆',
+  Camera: '▣',
+  Blind: '⌂',
+  'Food Plot': '♣',
+  Access: '↗',
+};
 const DUCK_LOGO_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAMAAADVRocKAAAAflBMVEX////ueCDudyDudiDtdiHtdSDudyHueCHveCHudiHueCLueSLtdiDtdyHteCHteCLveCLveSLveSHueSHvdyDweCHvdyHueiPveiPueSPveSPvdiDveiLvdiHudyLueCPtdyLtdh/weiPweSHueB/sdh7ueiLweiLweSLtdyCX3lX7AAAAAXRSTlMAQObYZgAABJtJREFUaN7tWG1z2zYMduWMYMBKJuTMFjktbZOtaf//HxxeSLu73Tl2TH3YnXC9VlWc5yGABy/0ZrPaaqutttpqTexTt314WA7+NwfeOQC3DLx7fAQAxBDQLUHxuXdugKC2iBMSGhgEXBgcNsdHHBygECCItT9/wB41PIWiLUHPh0dxQLAHbJ8FxUbNMA69uNCWQNWD9gcHzUFbhiJPRudIoZYDoG9I0BnDTsBRLUCIDX3wQBr9IRQCIqbkxtGOQKOPrFXJNYAnCxlRG4KRcXcion2g6P3Tk/ckFMR9ads1ILDAQCC2sZLuR+GAzvUNGHpQ8TDDr9qBT967roUH0ioYHoD2LcX5i6E2UWQC+H0ZBtgTaY/zh6dlCLiwNA+soUUISHsp53j0sEwaCMPxyCoVwS7CwLUWpmQT2Y/34/3XcqA68gHvb0LbrnM+EsXou8MfGiO2MtXwToKnw8GJ8OeZMSOPFvcnKweFwfNqEe7bjIjxnJPWkyeyUyM3ONeDsPFPQafBRxlcBzawMCh01jlAM6FOZBkC0vWE4UOn54BIw1c0IUiCLmQyB4JmQIamOPZ8O3xECiTnTLpApBxsEe17S6xR2/QP4cutDBx2KnM9pbKjaLThDK0aCuXp603wW87rGRRrnIQUh0pAuLPFBW9U6uh06yQLxAldIyXSr3n5F3e4ev3dys6PoRDYASXOSSIV0olxp8AyF1Dnc7wE+q0G3ovoActWGMo/9UlSnYxUhj4auUqWLnvQP3T+hatSA4/g7FcqvtGJA+lEgLJ16euiBLroweazI5q40ZCosRRWRTWelJOhlRAp7aSvku1IlyPP2CStQD+tq6ZQWNz5TdKnNOm6WKLPA2GicwzfTTK9evlgzpUAKFd8LuHEJNkIinpLeZcIXrHSvRJLgiFPOiwOYMluCkIQTgoA1ZRgo4yeC8h/dd2B+yO3NSla5KtRxdCgD9oo1BeCcnJ5IW3kqymOpnDx7NKOSdNmXQGwHFnd351iUm4cSn0Mp+qWmn4nxVU1AhmqvtUbk0s6F0OueS2fkjxz030v/r26mvEkCYtJqmUwTVMKZ8WUzMjvzNOUc3wPX2z09DJLGRgka8aipJFShYYqqvIJ9YW1fLz2UjByKfB5JAyYLJEmpWTPlYAdg2HQn0yzsFyF/neHXGzs8Jy5QMuMNJajAe9EY2SJ0uWafch8mN2V59/wmjnytC1tuhSRFXGyhPN/s/Fap9CX18KXIM0br3s52BA2Ge0KFr/jQue/zLfvHKCb4KtZOy7zgGrVJdJOSJootiNH80PwYs+YUHcFFaRI6QtXK4VjyiR5mpjkmu5zyRBszQqhZIBLauZ+m7O+f7sP3Qwgap8RsX6fOPJMgBgbXYXP9kJasD/k1IDLrOoiKXvy/nUJgk2o9yRaIESKG+s1iRmWINj7eh0el/HAb+tldYyLMDh3KE9vcREGnsvRnmbenqK0xab4Px0+u5JmvnpHvjvx5al/dM2KQr9dqSXwyk1datq1/FKc+/eeT+3tG9436VIZmnz1VG0I0or4zuZ96++pq8ko8H6ZLyZWW2211f6/9g8kVGkZ3tRsggAAAABJRU5ErkJggg==';
 const DEFAULT_REGION: Region = {
   latitude: 44.50,
@@ -644,6 +651,14 @@ export default function App() {
               <Text style={styles.profileName}>Jake</Text>
               <Text style={styles.subtle}>{session.user.email}</Text>
             </View>
+            <View style={styles.synopsisCard}>
+              <Text style={styles.synopsisTitle}>Sharing & Privacy</Text>
+              <View style={styles.synopsisRow}><Text style={styles.synopsisIcon}>🔗</Text><View style={styles.flex}><Text style={styles.rowTitle}>Link first</Text><Text style={styles.synopsisText}>Both hunters must connect through the invited email address before either account can receive shared information.</Text></View></View>
+              <View style={styles.synopsisRow}><Text style={styles.synopsisIcon}>⌖</Text><View style={styles.flex}><Text style={styles.rowTitle}>Grant each waypoint</Text><Text style={styles.synopsisText}>Linking an account never exposes your whole map. You choose each person for each waypoint below.</Text></View></View>
+              <View style={styles.synopsisRow}><Text style={styles.synopsisIcon}>▣</Text><View style={styles.flex}><Text style={styles.rowTitle}>Share cameras separately</Text><Text style={styles.synopsisText}>Tactacam access is controlled camera by camera and can be removed without changing waypoint access.</Text></View></View>
+              <View style={styles.synopsisRow}><Text style={styles.synopsisIcon}>▤</Text><View style={styles.flex}><Text style={styles.rowTitle}>Journal stays yours</Text><Text style={styles.synopsisText}>Hunt journal entries remain private. Field reports are visible only through the sharing rules you select.</Text></View></View>
+              <Text style={styles.synopsisFoot}>Weather and radar are live public weather data. Your coordinates, photos, journal, cameras, and account details are not made public.</Text>
+            </View>
             <View style={styles.panel}><Text style={styles.panelTitle}>Linked Accounts</Text><Text style={styles.privacyNotice}>Nothing is shared until both accounts are linked by email and you grant access below.</Text><View style={styles.inlineInputs}><TextInput style={[styles.input, styles.flex]} autoCapitalize="none" keyboardType="email-address" placeholder="hunter@email.com" placeholderTextColor="#778079" value={inviteEmail} onChangeText={setInviteEmail} /><Pressable style={styles.inviteButton} onPress={sendInvitation}><Text style={styles.primaryButtonText}>Invite</Text></Pressable></View>{linkedHunters.map((hunter) => <View style={styles.linkedRow} key={hunter.id}><View style={styles.linkedAvatar}><Text style={styles.linkedAvatarText}>{(hunter.display_name || hunter.email).charAt(0).toUpperCase() || '?'}</Text></View><View style={styles.flex}><Text style={styles.rowTitle}>{hunter.display_name || hunter.email.split('@')[0]}</Text><Text style={styles.subtle}>{hunter.email}</Text></View><Text style={styles.linkedStatus}>LINKED</Text></View>)}</View>
             {invitations.filter((invite) => invite.invitee_email.toLowerCase() === session.user.email?.toLowerCase() && invite.status === 'pending').map((invite) => <View style={styles.inviteCard} key={invite.id}><Text style={styles.panelTitle}>Account link request</Text><Text style={styles.subtle}>A DuckCast user invited {invite.invitee_email}.</Text><View style={styles.inlineInputs}><Pressable style={[styles.primaryButton, styles.flex]} onPress={() => respondToInvitation(invite.id, 'accepted')}><Text style={styles.primaryButtonText}>Accept</Text></Pressable><Pressable style={[styles.deleteButton, styles.flex]} onPress={() => respondToInvitation(invite.id, 'declined')}><Text style={styles.deleteText}>Decline</Text></Pressable></View></View>)}
             <View style={styles.panel}><Text style={styles.panelTitle}>Waypoint Sharing</Text><Text style={styles.subtle}>Choose exactly which linked hunters can see each waypoint.</Text>{waypoints.map((point) => <View style={styles.shareItem} key={point.id}><Text style={styles.rowTitle}>{point.name}</Text><View style={styles.shareChips}>{linkedHunters.map((hunter) => { const active = (waypointGrants[point.id] ?? []).includes(hunter.id); return <Pressable key={hunter.id} style={[styles.shareChip, active && styles.shareChipActive]} onPress={() => toggleGrant('waypoint', point.id, hunter.id)}><Text style={[styles.shareChipText, active && styles.shareChipTextActive]}>{hunter.display_name || hunter.email.split('@')[0]} {active ? '✓' : '+'}</Text></Pressable>; })}</View></View>)}</View>
@@ -703,7 +718,7 @@ export default function App() {
             <View style={styles.optionWrap}>
               {(['Hunt Spot', 'Camera', 'Blind', 'Food Plot', 'Access'] as WaypointType[]).map((type) => (
                 <Pressable key={type} style={[styles.typeOption, draftType === type && styles.typeOptionActive]} onPress={() => setDraftType(type)}>
-                  <Text style={[styles.typeOptionText, draftType === type && styles.optionTextActive]}>{type}</Text>
+                  <Text style={[styles.typeOptionText, draftType === type && styles.optionTextActive]}>{WAYPOINT_ICONS[type]}  {type}</Text>
                 </Pressable>
               ))}
             </View>
@@ -793,7 +808,9 @@ function WindMarker({ point, wind, showWind, showLabel, onPress, onMove }: { poi
     <Marker coordinate={point} title={showLabel ? `${point.type}: ${point.name}` : undefined} draggable onPress={onPress} onDragEnd={(event) => onMove(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)} anchor={{ x: 0.5, y: 1 }}>
       <View style={styles.windMarkerWrap}>
         {showWind && <View style={styles.windBadge}><Text style={[styles.windArrow, { transform: [{ rotate: `${wind?.direction ?? 0}deg` }] }]}>↑</Text><View><Text style={styles.windSpeed}>{wind ? `${wind.speed.toFixed(0)} mph` : '…'}</Text><Text style={styles.windDirection}>{wind ? `${wind.direction.toFixed(0)}°` : 'loading'}</Text></View></View>}
-        <View style={[styles.customPin, { backgroundColor: point.color }]}><View style={styles.customPinCore} /></View>
+        <View style={[styles.customPin, { backgroundColor: point.color }]}>
+          <Text style={[styles.waypointIcon, point.type === 'Hunt Spot' && styles.duckWaypointIcon]}>{WAYPOINT_ICONS[point.type]}</Text>
+        </View>
       </View>
     </Marker>
   );
@@ -1073,8 +1090,9 @@ const styles = StyleSheet.create({
   windArrow: { color: ORANGE, fontSize: 19, fontWeight: '900' },
   windSpeed: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
   windDirection: { color: '#9EA8A1', fontSize: 8 },
-  customPin: { width: 28, height: 28, borderRadius: 14, borderWidth: 3, borderColor: '#FFF4E8', alignItems: 'center', justifyContent: 'center' },
-  customPinCore: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#FFFFFF' },
+  customPin: { minWidth: 34, height: 34, borderRadius: 17, borderWidth: 3, borderColor: '#FFF4E8', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
+  waypointIcon: { color: '#FFFFFF', fontSize: 17, lineHeight: 20, fontWeight: '900' },
+  duckWaypointIcon: { fontSize: 15 },
   sectionHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   countPill: { minWidth: 58, alignItems: 'center', padding: 8, borderRadius: 12, backgroundColor: '#14231B', borderWidth: 1, borderColor: '#3A4D42' },
   countPillNumber: { color: ORANGE, fontSize: 20, fontWeight: '900' },
@@ -1100,6 +1118,12 @@ const styles = StyleSheet.create({
   authPage: { padding: 22, paddingTop: 52, gap: 14 },
   authIntro: { color: '#A7B0AA', fontSize: 15, lineHeight: 22, marginBottom: 8 },
   privacyNotice: { color: '#B9C1BC', fontSize: 12, lineHeight: 18, backgroundColor: '#0A1710', borderRadius: 9, padding: 10 },
+  synopsisCard: { backgroundColor: '#15271D', borderWidth: 1, borderColor: '#4B6254', borderRadius: 17, padding: 15, gap: 12 },
+  synopsisTitle: { color: '#EADCCB', fontFamily: 'Georgia', fontSize: 22, fontWeight: '800' },
+  synopsisRow: { flexDirection: 'row', gap: 11, alignItems: 'flex-start' },
+  synopsisIcon: { width: 28, color: ORANGE, fontSize: 20, textAlign: 'center' },
+  synopsisText: { color: '#AAB4AD', fontSize: 12, lineHeight: 17, marginTop: 2 },
+  synopsisFoot: { color: '#D5CABA', fontSize: 11, lineHeight: 16, backgroundColor: '#0A1710', borderRadius: 9, padding: 10 },
   inviteButton: { minWidth: 68, backgroundColor: ORANGE, borderRadius: 10, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
   linkedRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#2C3C33' },
   linkedAvatar: { width: 35, height: 35, borderRadius: 18, backgroundColor: '#1D3427', alignItems: 'center', justifyContent: 'center' },
