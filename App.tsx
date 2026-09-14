@@ -335,10 +335,7 @@ function BrandHeader() {
       </View>
       <View style={styles.dogBlock}>
         <Text style={styles.dog}>●ᴥ●</Text>
-        <Text style={styles.tagline}>WATER{'
-'}BIRDS{'
-'}BETTER{'
-'}DAYS.</Text>
+        <Text style={styles.tagline}>{`WATER\nBIRDS\nBETTER\nDAYS.`}</Text>
       </View>
     </View>
   );
