@@ -80,7 +80,7 @@ jobs:
           npx expo start --localhost --port 8081 > "${RUNNER_TEMP}/expo.log" 2>&1 &
           EXPO_PID=$!
           for attempt in {1..45}; do
-            if curl --fail --silent http://127.0.0.1:8081 >/dev/null; then
+            if curl --fail --silent http://127.0.0.1:8081/status >/dev/null; then
               break
             fi
             if ! kill -0 "${EXPO_PID}" 2>/dev/null; then
@@ -89,7 +89,7 @@ jobs:
             fi
             sleep 2
           done
-          curl --fail --silent http://127.0.0.1:8081 >/dev/null
+          curl --fail --silent http://127.0.0.1:8081/status >/dev/null
 
           EXPO_GO_URL="exp://${TUNNEL_URL#https://}"
           echo ""
