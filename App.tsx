@@ -23,8 +23,9 @@ import { supabase } from './supabase';
 type Tab = 'Map' | 'Weather' | 'Reports' | 'Journal' | 'Profile';
 type WaypointType = 'Hunt Spot' | 'Camera' | 'Blind' | 'Food Plot' | 'Access';
 type Waypoint = { id: string; name: string; latitude: number; longitude: number; private: boolean; type: WaypointType; color: string };
-type Report = { id: string; location: string; birds: string; species: string; notes: string; createdAt: string };
-type HuntEntry = { id: string; location: string; birds: string; notes: string; createdAt: string };
+type Report = { id: string; ownerId: string; location: string; birds: string; species: string; notes: string; createdAt: string; shared: boolean };
+type HuntEntry = { id: string; ownerId: string; location: string; birds: string; notes: string; createdAt: string; shared: boolean };
+type RadarFrame = { url: string; time: string };
 type WindReading = { speed: number; direction: number };
 type LinkedHunter = { id: string; email: string; display_name: string | null };
 type Invitation = { id: string; inviter_id: string; invitee_email: string; status: string };
@@ -99,7 +100,8 @@ export default function App() {
   const [showWind, setShowWind] = useState(false);
   const [radarUrl, setRadarUrl] = useState('');
   const [radarTime, setRadarTime] = useState('');
-  const [radarRefreshMinutes, setRadarRefreshMinutes] = useState<15 | 30>(15);
+  const [radarFrames, setRadarFrames] = useState<RadarFrame[]>([]);
+  const [radarFrameIndex, setRadarFrameIndex] = useState(0);
   const [waypointWind, setWaypointWind] = useState<Record<string, WindReading>>({});
   const [forecastRange, setForecastRange] = useState<'Hourly' | '3-Day' | '7-Day'>('Hourly');
   const [draftType, setDraftType] = useState<WaypointType>('Hunt Spot');
@@ -143,8 +145,8 @@ export default function App() {
       supabase.from('camera_grants').select('camera_id,viewer_id'),
     ]);
     if (wp.data) setWaypoints(wp.data.map((row) => ({ id: row.id, name: row.name, latitude: row.latitude, longitude: row.longitude, private: row.visibility === 'private', type: row.waypoint_type as WaypointType, color: row.color })));
-    if (reportRows.data) setReports(reportRows.data.map((row) => ({ id: row.id, location: row.location, birds: String(row.bird_count), species: row.species, notes: row.notes ?? '', createdAt: new Date(row.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) })));
-    if (journalRows.data) { setJournalEntries(journalRows.data.map((row) => ({ id: row.id, location: row.location, birds: String(row.birds_seen), notes: row.notes ?? '', createdAt: new Date(row.hunted_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) }))); setJournalCount(journalRows.data.length); }
+    if (reportRows.data) setReports(reportRows.data.map((row) => ({ id: row.id, ownerId: row.owner_id, location: row.location, birds: String(row.bird_count), species: row.species, notes: row.notes ?? '', createdAt: new Date(row.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' }), shared: row.visibility === 'linked' })));
+    if (journalRows.data) { setJournalEntries(journalRows.data.map((row) => ({ id: row.id, ownerId: row.owner_id, location: row.location, birds: String(row.birds_seen), notes: row.notes ?? '', createdAt: new Date(row.hunted_at).toLocaleDateString([], { month: 'short', day: 'numeric' }), shared: row.visibility === 'linked' }))); setJournalCount(journalRows.data.length); }
     if (profileRows.data) setLinkedHunters(profileRows.data.filter((row) => row.id !== session?.user.id));
     if (inviteRows.data) setInvitations(inviteRows.data);
     if (cameraRows.data) setCameras(cameraRows.data);
@@ -159,9 +161,28 @@ export default function App() {
   useEffect(() => {
     if (!showRadar) return;
     void refreshRadar();
-    const timer = setInterval(() => void refreshRadar(), radarRefreshMinutes * 60 * 1000);
+    const timer = setInterval(() => void refreshRadar(), 5 * 60 * 1000);
     return () => clearInterval(timer);
-  }, [showRadar, radarRefreshMinutes]);
+  }, [showRadar]);
+
+  useEffect(() => {
+    if (!showRadar || !radarFrames.length) return;
+    const showFrame = (index: number) => {
+      const frame = radarFrames[index];
+      if (!frame) return;
+      setRadarUrl(frame.url);
+      setRadarTime(frame.time);
+    };
+    showFrame(radarFrameIndex % radarFrames.length);
+    const animator = setInterval(() => {
+      setRadarFrameIndex((current) => {
+        const next = (current + 1) % radarFrames.length;
+        showFrame(next);
+        return next;
+      });
+    }, 900);
+    return () => clearInterval(animator);
+  }, [showRadar, radarFrames]);
 
   useEffect(() => {
     if (showWind && waypoints.length) void refreshWaypointWind();
@@ -175,8 +196,20 @@ export default function App() {
       const frames = data.radar?.past ?? [];
       const latest = frames[frames.length - 1];
       if (!latest?.path || !data.host) throw new Error('No radar frame');
-      setRadarUrl(`${data.host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`);
-      setRadarTime(new Date(Number(latest.time) * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+      const cutoff = Number(latest.time) - (30 * 60);
+      const rollingFrames: RadarFrame[] = frames
+        .filter((frame: { time: number }) => Number(frame.time) >= cutoff)
+        .map((frame: { path: string; time: number }) => ({
+          url: `${data.host}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`,
+          time: new Date(Number(frame.time) * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        }));
+      if (!rollingFrames.length) throw new Error('No rolling radar frames');
+      const firstFrame = rollingFrames[0];
+      if (!firstFrame) throw new Error('No rolling radar frames');
+      setRadarFrames(rollingFrames);
+      setRadarFrameIndex(0);
+      setRadarUrl(firstFrame.url);
+      setRadarTime(firstFrame.time);
     } catch {
       setShowRadar(false);
       Alert.alert('Precipitation radar', 'The live radar layer could not be loaded.');
@@ -358,11 +391,11 @@ export default function App() {
 
   function logHunt() {
     if (!journalLocation.trim()) { Alert.alert('Choose a hunt location'); return; }
-    const entry = { id: String(Date.now()), location: journalLocation.trim(), birds: journalBirds.trim() || '0', notes: journalNotes.trim(), createdAt: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }) };
+    const entry = { id: String(Date.now()), ownerId: session?.user.id ?? '', location: journalLocation.trim(), birds: journalBirds.trim() || '0', notes: journalNotes.trim(), createdAt: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }), shared: false };
     setJournalEntries((current) => [entry, ...current]);
     setJournalCount((count) => count + 1);
     setJournalLocation(''); setJournalBirds(''); setJournalNotes(''); setJournalForm(false);
-    if (session) void supabase.from('journal_entries').insert({ owner_id: session.user.id, location: entry.location, birds_seen: Number(entry.birds), notes: entry.notes });
+    if (session) void supabase.from('journal_entries').insert({ owner_id: session.user.id, location: entry.location, birds_seen: Number(entry.birds), notes: entry.notes, visibility: 'private' }).then(() => loadCloudData());
   }
 
   function publishReport() {
@@ -372,15 +405,28 @@ export default function App() {
     }
     setReports((current) => [{
       id: String(Date.now()),
+      ownerId: session?.user.id ?? '',
       location: reportLocation.trim(),
       birds: reportBirds.trim(),
       species: reportSpecies,
       notes: reportNotes.trim(),
       createdAt: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }),
+      shared: false,
     }, ...current]);
     setReportBirds('');
     setReportNotes('');
-    if (session) void supabase.from('field_reports').insert({ owner_id: session.user.id, location: reportLocation.trim(), bird_count: Number(reportBirds), species: reportSpecies, notes: reportNotes.trim(), visibility: 'linked' }).then(() => loadCloudData());
+    if (session) void supabase.from('field_reports').insert({ owner_id: session.user.id, location: reportLocation.trim(), bird_count: Number(reportBirds), species: reportSpecies, notes: reportNotes.trim(), visibility: 'private' }).then(() => loadCloudData());
+  }
+
+  async function toggleEntrySharing(kind: 'report' | 'journal', id: string, shared: boolean) {
+    if (!session || id.length < 20) return;
+    const table = kind === 'report' ? 'field_reports' : 'journal_entries';
+    const { error } = await supabase.from(table).update({ visibility: shared ? 'private' : 'linked' }).eq('id', id).eq('owner_id', session.user.id);
+    if (error) Alert.alert('Sharing', error.message);
+    else {
+      if (kind === 'report') setReports((current) => current.map((item) => item.id === id ? { ...item, shared: !shared } : item));
+      else setJournalEntries((current) => current.map((item) => item.id === id ? { ...item, shared: !shared } : item));
+    }
   }
 
   async function sendInvitation() {
@@ -438,7 +484,7 @@ export default function App() {
                   event.nativeEvent.coordinate.longitude
                 )}
               >
-                {showRadar && !!radarUrl && <UrlTile urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={20} opacity={0.68} zIndex={2} tileSize={256} />}
+                {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={20} opacity={0.68} zIndex={2} tileSize={256} />}
                 {showWaypoints && waypoints.map((point) => (
                   <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={showLabels} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
                 ))}
@@ -546,7 +592,7 @@ export default function App() {
               showsCompass
               onLongPress={(event) => addWaypoint(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
             >
-              {showRadar && !!radarUrl && <UrlTile urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={20} opacity={0.68} zIndex={2} tileSize={256} />}
+              {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={20} opacity={0.68} zIndex={2} tileSize={256} />}
               {showWaypoints && waypoints.map((point) => (
                 <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={showLabels} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
               ))}
@@ -627,6 +673,9 @@ export default function App() {
               <View style={styles.reportCard} key={report.id}>
                 <View style={styles.reportTop}><View><Text style={styles.panelTitle}>{report.location}</Text><Text style={styles.reportDate}>{report.createdAt} · {report.species}</Text></View><View style={styles.birdCountBadge}><Text style={styles.reportCount}>{report.birds}</Text><Text style={styles.birdCountLabel}>BIRDS</Text></View></View>
                 <Text style={styles.subtle}>{report.notes || 'No additional field notes.'}</Text>
+                {report.ownerId === session.user.id
+                  ? <ShareToggle shared={report.shared} onPress={() => toggleEntrySharing('report', report.id, report.shared)} />
+                  : <Text style={styles.sharedByLabel}>SHARED BY A LINKED HUNTER</Text>}
               </View>
             ))}
           </ScrollView>
@@ -638,7 +687,7 @@ export default function App() {
             <View style={styles.seasonStats}><View style={styles.statBlock}><Text style={styles.statNumber}>{journalCount}</Text><Text style={styles.statLabel}>HUNTS</Text></View><View style={styles.statDivider} /><View style={styles.statBlock}><Text style={styles.statNumber}>{journalEntries.reduce((sum, entry) => sum + Number(entry.birds || 0), 0)}</Text><Text style={styles.statLabel}>BIRDS SEEN</Text></View><View style={styles.statDivider} /><View style={styles.statBlock}><Text style={styles.statNumber}>{waypoints.length}</Text><Text style={styles.statLabel}>SPOTS</Text></View></View>
             {journalForm && <View style={styles.composerCard}><Text style={styles.panelTitle}>New hunt entry</Text><TextInput style={styles.input} placeholder="Waypoint or location" placeholderTextColor="#778079" value={journalLocation} onChangeText={setJournalLocation} /><TextInput style={styles.input} placeholder="Birds seen" placeholderTextColor="#778079" keyboardType="number-pad" value={journalBirds} onChangeText={setJournalBirds} /><TextInput style={[styles.input, styles.notes]} placeholder="Conditions, harvest, dog work and notes…" placeholderTextColor="#778079" multiline value={journalNotes} onChangeText={setJournalNotes} /><Pressable style={styles.primaryButton} onPress={logHunt}><Text style={styles.primaryButtonText}>Save Hunt</Text></Pressable></View>}
             {!journalEntries.length && !journalForm && <View style={styles.emptyState}><Text style={styles.emptyStateIcon}>▤</Text><Text style={styles.panelTitle}>Start your season log</Text><Text style={styles.subtle}>Keep locations, conditions, birds and dog work together.</Text></View>}
-            {journalEntries.map((entry) => <View style={styles.journalCard} key={entry.id}><View style={styles.journalDate}><Text style={styles.journalDateText}>{entry.createdAt}</Text></View><View style={styles.flex}><Text style={styles.panelTitle}>{entry.location}</Text><Text style={styles.reportDate}>{entry.birds} birds seen</Text><Text style={styles.subtle}>{entry.notes || 'No notes added.'}</Text></View></View>)}
+            {journalEntries.map((entry) => <View style={styles.journalCard} key={entry.id}><View style={styles.journalDate}><Text style={styles.journalDateText}>{entry.createdAt}</Text></View><View style={styles.flex}><Text style={styles.panelTitle}>{entry.location}</Text><Text style={styles.reportDate}>{entry.birds} birds seen</Text><Text style={styles.subtle}>{entry.notes || 'No notes added.'}</Text>{entry.ownerId === session.user.id ? <ShareToggle shared={entry.shared} onPress={() => toggleEntrySharing('journal', entry.id, entry.shared)} /> : <Text style={styles.sharedByLabel}>SHARED BY A LINKED HUNTER</Text>}</View></View>)}
           </ScrollView>
         )}
 
@@ -656,7 +705,7 @@ export default function App() {
               <View style={styles.synopsisRow}><Text style={styles.synopsisIcon}>🔗</Text><View style={styles.flex}><Text style={styles.rowTitle}>Link first</Text><Text style={styles.synopsisText}>Both hunters must connect through the invited email address before either account can receive shared information.</Text></View></View>
               <View style={styles.synopsisRow}><Text style={styles.synopsisIcon}>⌖</Text><View style={styles.flex}><Text style={styles.rowTitle}>Grant each waypoint</Text><Text style={styles.synopsisText}>Linking an account never exposes your whole map. You choose each person for each waypoint below.</Text></View></View>
               <View style={styles.synopsisRow}><Text style={styles.synopsisIcon}>▣</Text><View style={styles.flex}><Text style={styles.rowTitle}>Share cameras separately</Text><Text style={styles.synopsisText}>Tactacam access is controlled camera by camera and can be removed without changing waypoint access.</Text></View></View>
-              <View style={styles.synopsisRow}><Text style={styles.synopsisIcon}>▤</Text><View style={styles.flex}><Text style={styles.rowTitle}>Journal stays yours</Text><Text style={styles.synopsisText}>Hunt journal entries remain private. Field reports are visible only through the sharing rules you select.</Text></View></View>
+              <View style={styles.synopsisRow}><Text style={styles.synopsisIcon}>▤</Text><View style={styles.flex}><Text style={styles.rowTitle}>Entries start private</Text><Text style={styles.synopsisText}>Every journal entry and report starts off. Turn sharing on for only the entries you want linked hunters to see.</Text></View></View>
               <Text style={styles.synopsisFoot}>Weather and radar are live public weather data. Your coordinates, photos, journal, cameras, and account details are not made public.</Text>
             </View>
             <View style={styles.panel}><Text style={styles.panelTitle}>Linked Accounts</Text><Text style={styles.privacyNotice}>Nothing is shared until both accounts are linked by email and you grant access below.</Text><View style={styles.inlineInputs}><TextInput style={[styles.input, styles.flex]} autoCapitalize="none" keyboardType="email-address" placeholder="hunter@email.com" placeholderTextColor="#778079" value={inviteEmail} onChangeText={setInviteEmail} /><Pressable style={styles.inviteButton} onPress={sendInvitation}><Text style={styles.primaryButtonText}>Invite</Text></Pressable></View>{linkedHunters.map((hunter) => <View style={styles.linkedRow} key={hunter.id}><View style={styles.linkedAvatar}><Text style={styles.linkedAvatarText}>{(hunter.display_name || hunter.email).charAt(0).toUpperCase() || '?'}</Text></View><View style={styles.flex}><Text style={styles.rowTitle}>{hunter.display_name || hunter.email.split('@')[0]}</Text><Text style={styles.subtle}>{hunter.email}</Text></View><Text style={styles.linkedStatus}>LINKED</Text></View>)}</View>
@@ -679,9 +728,9 @@ export default function App() {
               <Text style={styles.rowTitle}>Waypoint Labels</Text><Text style={styles.controlValue}>{showLabels ? 'ON' : 'OFF'}</Text>
             </Pressable>
             <Pressable style={styles.controlRow} onPress={() => setShowRadar((value) => !value)}>
-              <View><Text style={styles.rowTitle}>Precipitation Radar</Text><Text style={styles.controlSub}>Latest live radar frame</Text></View><Text style={styles.controlValue}>{showRadar ? 'ON' : 'OFF'}</Text>
+              <View><Text style={styles.rowTitle}>Precipitation Radar</Text><Text style={styles.controlSub}>Continuously animated rolling radar</Text></View><Text style={styles.controlValue}>{showRadar ? 'ON' : 'OFF'}</Text>
             </Pressable>
-            {showRadar && <View style={styles.radarCycleRow}><Text style={styles.rowTitle}>Radar Refresh</Text><View style={styles.cycleButtons}>{([15, 30] as const).map((minutes) => <Pressable key={minutes} style={[styles.cycleButton, radarRefreshMinutes === minutes && styles.cycleButtonActive]} onPress={() => setRadarRefreshMinutes(minutes)}><Text style={[styles.cycleButtonText, radarRefreshMinutes === minutes && styles.cycleButtonTextActive]}>{minutes} min</Text></Pressable>)}</View></View>}
+            {showRadar && <View style={styles.radarCycleRow}><View><Text style={styles.rowTitle}>30-Minute Loop</Text><Text style={styles.controlSub}>Cycles oldest to newest continuously</Text></View><Text style={styles.controlValue}>LIVE</Text></View>}
             <Pressable style={styles.controlRow} onPress={() => setShowWind((value) => !value)}>
               <View><Text style={styles.rowTitle}>Waypoint Wind</Text><Text style={styles.controlSub}>Compass + speed at each pin</Text></View><Text style={styles.controlValue}>{showWind ? 'ON' : 'OFF'}</Text>
             </Pressable>
@@ -813,6 +862,15 @@ function WindMarker({ point, wind, showWind, showLabel, onPress, onMove }: { poi
         </View>
       </View>
     </Marker>
+  );
+}
+
+function ShareToggle({ shared, onPress }: { shared: boolean; onPress: () => void }) {
+  return (
+    <Pressable style={styles.shareToggleRow} onPress={onPress} accessibilityRole="switch" accessibilityState={{ checked: shared }}>
+      <View><Text style={styles.shareToggleTitle}>Share with linked accounts</Text><Text style={styles.shareToggleStatus}>{shared ? 'ON · Linked hunters can view this entry' : 'OFF · Private to you'}</Text></View>
+      <View style={[styles.switchTrack, shared && styles.switchTrackOn]}><View style={[styles.switchKnob, shared && styles.switchKnobOn]} /></View>
+    </Pressable>
   );
 }
 
@@ -1102,6 +1160,14 @@ const styles = StyleSheet.create({
   emptyState: { alignItems: 'center', backgroundColor: '#0D1B14', borderWidth: 1, borderStyle: 'dashed', borderColor: '#3A4D42', borderRadius: 18, padding: 28, gap: 6 },
   emptyStateIcon: { color: ORANGE, fontSize: 30 },
   reportCard: { backgroundColor: '#122219', borderLeftWidth: 4, borderLeftColor: ORANGE, borderRadius: 14, padding: 15, gap: 10 },
+  shareToggleRow: { marginTop: 4, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#2C3C33', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  shareToggleTitle: { color: '#E8E3DA', fontSize: 12, fontWeight: '800' },
+  shareToggleStatus: { color: '#89958D', fontSize: 9, marginTop: 2 },
+  switchTrack: { width: 43, height: 24, borderRadius: 12, padding: 3, backgroundColor: '#435047' },
+  switchTrackOn: { backgroundColor: ORANGE },
+  switchKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#FFFFFF' },
+  switchKnobOn: { alignSelf: 'flex-end' },
+  sharedByLabel: { color: '#73B884', fontSize: 9, fontWeight: '900', marginTop: 6 },
   reportDate: { color: '#8F9A93', fontSize: 11, marginTop: 3 },
   birdCountBadge: { minWidth: 52, alignItems: 'center', padding: 7, borderRadius: 10, backgroundColor: '#0A1710' },
   birdCountLabel: { color: '#87928B', fontSize: 8, fontWeight: '900' },
