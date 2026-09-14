@@ -15,6 +15,8 @@ import MapView, { Marker, Region, UrlTile } from 'react-native-maps';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
+import type { Session } from '@supabase/supabase-js';
+import { supabase } from './supabase';
 
 type Tab = 'Map' | 'Weather' | 'Reports' | 'Journal' | 'Profile';
 type WaypointType = 'Hunt Spot' | 'Camera' | 'Blind' | 'Food Plot' | 'Access';
@@ -22,6 +24,9 @@ type Waypoint = { id: string; name: string; latitude: number; longitude: number;
 type Report = { id: string; location: string; birds: string; species: string; notes: string; createdAt: string };
 type HuntEntry = { id: string; location: string; birds: string; notes: string; createdAt: string };
 type WindReading = { speed: number; direction: number };
+type LinkedHunter = { id: string; email: string; display_name: string | null };
+type Invitation = { id: string; inviter_id: string; invitee_email: string; status: string };
+type Camera = { id: string; name: string; sharing_enabled: boolean; owner_id: string };
 type Weather = {
   temperature: number;
   windSpeed: number;
@@ -51,6 +56,8 @@ const samplePhotos = [
 ];
 
 export default function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [tab, setTab] = useState<Tab>('Map');
   const [region, setRegion] = useState<Region>(DEFAULT_REGION);
   const mapRef = useRef<MapView>(null);
@@ -88,6 +95,13 @@ export default function App() {
   const [forecastRange, setForecastRange] = useState<'Hourly' | '3-Day' | '7-Day'>('Hourly');
   const [draftType, setDraftType] = useState<WaypointType>('Hunt Spot');
   const [draftColor, setDraftColor] = useState(ORANGE);
+  const [linkedHunters, setLinkedHunters] = useState<LinkedHunter[]>([]);
+  const [invitations, setInvitations] = useState<Invitation[]>([]);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [cameras, setCameras] = useState<Camera[]>([]);
+  const [cameraName, setCameraName] = useState('');
+  const [waypointGrants, setWaypointGrants] = useState<Record<string, string[]>>({});
+  const [cameraGrants, setCameraGrants] = useState<Record<string, string[]>>({});
 
   const selected = useMemo(
     () => waypoints.find((point) => point.id === selectedId),
@@ -97,6 +111,37 @@ export default function App() {
   useEffect(() => {
     void locateUser();
   }, []);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => { setSession(data.session); setAuthReady(true); });
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => { setSession(nextSession); setAuthReady(true); });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (session) void loadCloudData();
+  }, [session?.user.id]);
+
+  async function loadCloudData() {
+    const [wp, reportRows, journalRows, profileRows, inviteRows, cameraRows, wpGrantRows, cameraGrantRows] = await Promise.all([
+      supabase.from('waypoints').select('*').order('created_at'),
+      supabase.from('field_reports').select('*').order('created_at', { ascending: false }),
+      supabase.from('journal_entries').select('*').order('hunted_at', { ascending: false }),
+      supabase.from('profiles').select('id,email,display_name'),
+      supabase.from('account_invitations').select('*').order('created_at', { ascending: false }),
+      supabase.from('cameras').select('*').order('created_at'),
+      supabase.from('waypoint_grants').select('waypoint_id,viewer_id'),
+      supabase.from('camera_grants').select('camera_id,viewer_id'),
+    ]);
+    if (wp.data) setWaypoints(wp.data.map((row) => ({ id: row.id, name: row.name, latitude: row.latitude, longitude: row.longitude, private: row.visibility === 'private', type: row.waypoint_type as WaypointType, color: row.color })));
+    if (reportRows.data) setReports(reportRows.data.map((row) => ({ id: row.id, location: row.location, birds: String(row.bird_count), species: row.species, notes: row.notes ?? '', createdAt: new Date(row.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) })));
+    if (journalRows.data) { setJournalEntries(journalRows.data.map((row) => ({ id: row.id, location: row.location, birds: String(row.birds_seen), notes: row.notes ?? '', createdAt: new Date(row.hunted_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) }))); setJournalCount(journalRows.data.length); }
+    if (profileRows.data) setLinkedHunters(profileRows.data.filter((row) => row.id !== session?.user.id));
+    if (inviteRows.data) setInvitations(inviteRows.data);
+    if (cameraRows.data) setCameras(cameraRows.data);
+    if (wpGrantRows.data) setWaypointGrants(groupGrants(wpGrantRows.data, 'waypoint_id'));
+    if (cameraGrantRows.data) setCameraGrants(groupGrants(cameraGrantRows.data, 'camera_id'));
+  }
 
   useEffect(() => {
     if (selected) void refreshWeather(selected);
@@ -243,7 +288,7 @@ export default function App() {
     }
   }
 
-  function saveWaypointName() {
+  async function saveWaypointName() {
     const name = draftName.trim();
     if (!name || !selected) return;
     const updated = { ...selected, name, type: draftType, color: draftColor };
@@ -251,6 +296,15 @@ export default function App() {
     setEditing(false);
     setWeather(null);
     void refreshWeather(updated);
+    if (session) {
+      const payload = { owner_id: session.user.id, name, waypoint_type: draftType, latitude: selected.latitude, longitude: selected.longitude, color: draftColor, visibility: selected.private ? 'private' : 'linked', updated_at: new Date().toISOString() };
+      if (selected.id.length > 20) await supabase.from('waypoints').update(payload).eq('id', selected.id);
+      else {
+        const { data } = await supabase.from('waypoints').insert(payload).select('id').single();
+        if (data) setSelectedId(data.id);
+      }
+      void loadCloudData();
+    }
   }
 
   function deleteWaypoint() {
@@ -260,6 +314,7 @@ export default function App() {
     setSelectedId(remaining[0]?.id ?? '');
     setWeather(null);
     setEditing(false);
+    if (selected.id.length > 20) void supabase.from('waypoints').delete().eq('id', selected.id);
   }
 
   function confirmDeleteWaypoint() {
@@ -289,6 +344,7 @@ export default function App() {
     setWaypoints((current) => current.map((point) =>
       point.id === selected.id ? { ...point, private: !point.private } : point
     ));
+    if (selected.id.length > 20) void supabase.from('waypoints').update({ visibility: selected.private ? 'linked' : 'private' }).eq('id', selected.id);
   }
 
   function logHunt() {
@@ -297,6 +353,7 @@ export default function App() {
     setJournalEntries((current) => [entry, ...current]);
     setJournalCount((count) => count + 1);
     setJournalLocation(''); setJournalBirds(''); setJournalNotes(''); setJournalForm(false);
+    if (session) void supabase.from('journal_entries').insert({ owner_id: session.user.id, location: entry.location, birds_seen: Number(entry.birds), notes: entry.notes });
   }
 
   function publishReport() {
@@ -314,7 +371,42 @@ export default function App() {
     }, ...current]);
     setReportBirds('');
     setReportNotes('');
+    if (session) void supabase.from('field_reports').insert({ owner_id: session.user.id, location: reportLocation.trim(), bird_count: Number(reportBirds), species: reportSpecies, notes: reportNotes.trim(), visibility: 'linked' }).then(() => loadCloudData());
   }
+
+  async function sendInvitation() {
+    const email = inviteEmail.trim().toLowerCase();
+    if (!email || !session) return;
+    const { error } = await supabase.from('account_invitations').insert({ inviter_id: session.user.id, invitee_email: email });
+    if (error) Alert.alert('Account link', error.message);
+    else { setInviteEmail(''); Alert.alert('Invitation created', `When ${email} creates or signs into DuckCast, they can accept your link request.`); void loadCloudData(); }
+  }
+
+  async function respondToInvitation(id: string, status: 'accepted' | 'declined') {
+    const { error } = await supabase.from('account_invitations').update({ status }).eq('id', id);
+    if (error) Alert.alert('Account link', error.message); else void loadCloudData();
+  }
+
+  async function addCamera() {
+    if (!cameraName.trim() || !session) return;
+    const { error } = await supabase.from('cameras').insert({ owner_id: session.user.id, name: cameraName.trim(), provider: 'tactacam' });
+    if (error) Alert.alert('Camera', error.message); else { setCameraName(''); void loadCloudData(); }
+  }
+
+  async function toggleGrant(kind: 'waypoint' | 'camera', itemId: string, viewerId: string) {
+    if (!session) return;
+    const table = kind === 'waypoint' ? 'waypoint_grants' : 'camera_grants';
+    const idColumn = kind === 'waypoint' ? 'waypoint_id' : 'camera_id';
+    const current = kind === 'waypoint' ? waypointGrants[itemId] ?? [] : cameraGrants[itemId] ?? [];
+    if (current.includes(viewerId)) await supabase.from(table).delete().eq(idColumn, itemId).eq('viewer_id', viewerId);
+    else await supabase.from(table).insert({ [idColumn]: itemId, viewer_id: viewerId, granted_by: session.user.id });
+    if (kind === 'waypoint') await supabase.from('waypoints').update({ visibility: 'linked' }).eq('id', itemId);
+    else await supabase.from('cameras').update({ sharing_enabled: true }).eq('id', itemId);
+    void loadCloudData();
+  }
+
+  if (!authReady) return <SafeAreaView style={styles.safe}><BrandHeader /><View style={styles.authLoading}><Text style={styles.weatherTitle}>Opening DuckCast…</Text></View></SafeAreaView>;
+  if (!session) return <AuthScreen />;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -548,13 +640,13 @@ export default function App() {
             <View style={styles.profileCard}>
               <View style={styles.avatar}><Text style={styles.avatarText}>J</Text></View>
               <Text style={styles.profileName}>Jake</Text>
-              <Text style={styles.subtle}>Wisconsin · Arkansas</Text>
+              <Text style={styles.subtle}>{session.user.email}</Text>
             </View>
-            {['Saved Waypoints', 'Tactacam Connections', 'Privacy & Sharing', 'Weather Settings'].map((label) => (
-              <Pressable style={styles.settingsRow} key={label} onPress={() => Alert.alert(label, 'This DuckCast setting is ready for account connection.')}>
-                <Text style={styles.rowTitle}>{label}</Text><Text style={styles.chevron}>›</Text>
-              </Pressable>
-            ))}
+            <View style={styles.panel}><Text style={styles.panelTitle}>Linked Accounts</Text><Text style={styles.privacyNotice}>Nothing is shared until both accounts are linked by email and you grant access below.</Text><View style={styles.inlineInputs}><TextInput style={[styles.input, styles.flex]} autoCapitalize="none" keyboardType="email-address" placeholder="hunter@email.com" placeholderTextColor="#778079" value={inviteEmail} onChangeText={setInviteEmail} /><Pressable style={styles.inviteButton} onPress={sendInvitation}><Text style={styles.primaryButtonText}>Invite</Text></Pressable></View>{linkedHunters.map((hunter) => <View style={styles.linkedRow} key={hunter.id}><View style={styles.linkedAvatar}><Text style={styles.linkedAvatarText}>{(hunter.display_name || hunter.email).charAt(0).toUpperCase() || '?'}</Text></View><View style={styles.flex}><Text style={styles.rowTitle}>{hunter.display_name || hunter.email.split('@')[0]}</Text><Text style={styles.subtle}>{hunter.email}</Text></View><Text style={styles.linkedStatus}>LINKED</Text></View>)}</View>
+            {invitations.filter((invite) => invite.invitee_email.toLowerCase() === session.user.email?.toLowerCase() && invite.status === 'pending').map((invite) => <View style={styles.inviteCard} key={invite.id}><Text style={styles.panelTitle}>Account link request</Text><Text style={styles.subtle}>A DuckCast user invited {invite.invitee_email}.</Text><View style={styles.inlineInputs}><Pressable style={[styles.primaryButton, styles.flex]} onPress={() => respondToInvitation(invite.id, 'accepted')}><Text style={styles.primaryButtonText}>Accept</Text></Pressable><Pressable style={[styles.deleteButton, styles.flex]} onPress={() => respondToInvitation(invite.id, 'declined')}><Text style={styles.deleteText}>Decline</Text></Pressable></View></View>)}
+            <View style={styles.panel}><Text style={styles.panelTitle}>Waypoint Sharing</Text><Text style={styles.subtle}>Choose exactly which linked hunters can see each waypoint.</Text>{waypoints.map((point) => <View style={styles.shareItem} key={point.id}><Text style={styles.rowTitle}>{point.name}</Text><View style={styles.shareChips}>{linkedHunters.map((hunter) => { const active = (waypointGrants[point.id] ?? []).includes(hunter.id); return <Pressable key={hunter.id} style={[styles.shareChip, active && styles.shareChipActive]} onPress={() => toggleGrant('waypoint', point.id, hunter.id)}><Text style={[styles.shareChipText, active && styles.shareChipTextActive]}>{hunter.display_name || hunter.email.split('@')[0]} {active ? '✓' : '+'}</Text></Pressable>; })}</View></View>)}</View>
+            <View style={styles.panel}><Text style={styles.panelTitle}>Tactacam Sharing</Text><Text style={styles.subtle}>Each camera stays private until you enable a linked hunter here.</Text><View style={styles.inlineInputs}><TextInput style={[styles.input, styles.flex]} placeholder="Camera name" placeholderTextColor="#778079" value={cameraName} onChangeText={setCameraName} /><Pressable style={styles.inviteButton} onPress={addCamera}><Text style={styles.primaryButtonText}>Add</Text></Pressable></View>{cameras.map((camera) => <View style={styles.shareItem} key={camera.id}><Text style={styles.rowTitle}>{camera.name}</Text><View style={styles.shareChips}>{linkedHunters.map((hunter) => { const active = (cameraGrants[camera.id] ?? []).includes(hunter.id); return <Pressable key={hunter.id} style={[styles.shareChip, active && styles.shareChipActive]} onPress={() => toggleGrant('camera', camera.id, hunter.id)}><Text style={[styles.shareChipText, active && styles.shareChipTextActive]}>{hunter.display_name || hunter.email.split('@')[0]} {active ? '✓' : '+'}</Text></Pressable>; })}</View></View>)}</View>
+            <Pressable style={styles.signOutButton} onPress={() => supabase.auth.signOut()}><Text style={styles.deleteText}>Sign Out</Text></Pressable>
           </ScrollView>
         )}
       </View>
@@ -649,6 +741,31 @@ export default function App() {
       <BottomTabs active={tab} onChange={setTab} />
     </SafeAreaView>
   );
+}
+
+function groupGrants(rows: Record<string, string>[], key: string) {
+  return rows.reduce<Record<string, string[]>>((grouped, row) => {
+    const itemId = row[key];
+    if (!itemId || !row.viewer_id) return grouped;
+    grouped[itemId] = [...(grouped[itemId] ?? []), row.viewer_id];
+    return grouped;
+  }, {});
+}
+
+function AuthScreen() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [registering, setRegistering] = useState(false);
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    if (!email.trim() || password.length < 6) { Alert.alert('DuckCast account', 'Enter your email and a password of at least 6 characters.'); return; }
+    setBusy(true);
+    const result = registering ? await supabase.auth.signUp({ email: email.trim().toLowerCase(), password }) : await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+    setBusy(false);
+    if (result.error) Alert.alert('DuckCast account', result.error.message);
+    else if (registering && !result.data.session) Alert.alert('Check your email', 'Confirm your DuckCast account, then sign in.');
+  }
+  return <SafeAreaView style={styles.safe}><StatusBar style="light" /><BrandHeader /><ScrollView contentContainerStyle={styles.authPage}><Text style={styles.eyebrow}>PRIVATE BY DEFAULT</Text><Text style={styles.pageTitle}>{registering ? 'Create Account' : 'Welcome Back'}</Text><Text style={styles.authIntro}>Your locations, reports and cameras stay private unless you link another account by email and grant access.</Text><View style={styles.composerCard}><TextInput style={styles.input} autoCapitalize="none" keyboardType="email-address" placeholder="Email address" placeholderTextColor="#778079" value={email} onChangeText={setEmail} /><TextInput style={styles.input} secureTextEntry placeholder="Password" placeholderTextColor="#778079" value={password} onChangeText={setPassword} /><Pressable style={styles.primaryButton} onPress={submit} disabled={busy}><Text style={styles.primaryButtonText}>{busy ? 'Please wait…' : registering ? 'Create DuckCast Account' : 'Sign In'}</Text></Pressable><Pressable style={styles.cancelButton} onPress={() => setRegistering((value) => !value)}><Text style={styles.cancelText}>{registering ? 'Already have an account? Sign in' : 'New to DuckCast? Create an account'}</Text></Pressable></View></ScrollView></SafeAreaView>;
 }
 
 function BrandHeader() {
@@ -977,4 +1094,21 @@ const styles = StyleSheet.create({
   journalCard: { flexDirection: 'row', gap: 12, backgroundColor: '#122219', borderRadius: 14, padding: 14 },
   journalDate: { width: 48, height: 48, borderRadius: 12, backgroundColor: '#1C3025', alignItems: 'center', justifyContent: 'center' },
   journalDateText: { color: ORANGE, fontSize: 10, fontWeight: '900', textAlign: 'center' },
+  authLoading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  authPage: { padding: 22, paddingTop: 52, gap: 14 },
+  authIntro: { color: '#A7B0AA', fontSize: 15, lineHeight: 22, marginBottom: 8 },
+  privacyNotice: { color: '#B9C1BC', fontSize: 12, lineHeight: 18, backgroundColor: '#0A1710', borderRadius: 9, padding: 10 },
+  inviteButton: { minWidth: 68, backgroundColor: ORANGE, borderRadius: 10, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  linkedRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#2C3C33' },
+  linkedAvatar: { width: 35, height: 35, borderRadius: 18, backgroundColor: '#1D3427', alignItems: 'center', justifyContent: 'center' },
+  linkedAvatarText: { color: ORANGE, fontWeight: '900' },
+  linkedStatus: { color: '#73B884', fontSize: 9, fontWeight: '900' },
+  inviteCard: { backgroundColor: '#18291F', borderWidth: 1, borderColor: ORANGE, borderRadius: 15, padding: 14, gap: 10 },
+  shareItem: { gap: 8, paddingVertical: 11, borderTopWidth: 1, borderTopColor: '#2C3C33' },
+  shareChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  shareChip: { borderWidth: 1, borderColor: '#45564D', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 7 },
+  shareChipActive: { backgroundColor: '#28553A', borderColor: '#5A9B70' },
+  shareChipText: { color: '#A5AEA8', fontSize: 10, fontWeight: '800' },
+  shareChipTextActive: { color: '#FFFFFF' },
+  signOutButton: { borderWidth: 1, borderColor: '#70413D', borderRadius: 11, padding: 13, alignItems: 'center' },
 });
