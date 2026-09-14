@@ -81,8 +81,8 @@ export default function App() {
   const [reportNotes, setReportNotes] = useState('');
   const [reports, setReports] = useState<Report[]>([]);
   const [reportSpecies, setReportSpecies] = useState('Waterfowl');
+  const [reportWaypointId, setReportWaypointId] = useState('');
   const [mapType, setMapType] = useState<'hybrid' | 'satellite'>('hybrid');
-  const [photoFilter, setPhotoFilter] = useState('24H');
   const [editing, setEditing] = useState(false);
   const [moreMenu, setMoreMenu] = useState(false);
   const [draftName, setDraftName] = useState('');
@@ -93,6 +93,7 @@ export default function App() {
   const [journalLocation, setJournalLocation] = useState('');
   const [journalBirds, setJournalBirds] = useState('');
   const [journalNotes, setJournalNotes] = useState('');
+  const [journalWaypointId, setJournalWaypointId] = useState('');
   const [mapControls, setMapControls] = useState(false);
   const [showWaypoints, setShowWaypoints] = useState(true);
   const [showLabels, setShowLabels] = useState(true);
@@ -394,8 +395,8 @@ export default function App() {
     const entry = { id: String(Date.now()), ownerId: session?.user.id ?? '', location: journalLocation.trim(), birds: journalBirds.trim() || '0', notes: journalNotes.trim(), createdAt: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }), shared: false };
     setJournalEntries((current) => [entry, ...current]);
     setJournalCount((count) => count + 1);
-    setJournalLocation(''); setJournalBirds(''); setJournalNotes(''); setJournalForm(false);
-    if (session) void supabase.from('journal_entries').insert({ owner_id: session.user.id, location: entry.location, birds_seen: Number(entry.birds), notes: entry.notes, visibility: 'private' }).then(() => loadCloudData());
+    setJournalLocation(''); setJournalBirds(''); setJournalNotes(''); setJournalWaypointId(''); setJournalForm(false);
+    if (session) void supabase.from('journal_entries').insert({ owner_id: session.user.id, waypoint_id: journalWaypointId || null, location: entry.location, birds_seen: Number(entry.birds), notes: entry.notes, visibility: 'private' }).then(() => loadCloudData());
   }
 
   function publishReport() {
@@ -415,6 +416,7 @@ export default function App() {
     }, ...current]);
     setReportBirds('');
     setReportNotes('');
+    setReportWaypointId('');
     if (session) void supabase.from('field_reports').insert({ owner_id: session.user.id, location: reportLocation.trim(), bird_count: Number(reportBirds), species: reportSpecies, notes: reportNotes.trim(), visibility: 'private' }).then(() => loadCloudData());
   }
 
@@ -484,7 +486,7 @@ export default function App() {
                   event.nativeEvent.coordinate.longitude
                 )}
               >
-                {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={20} opacity={0.68} zIndex={2} tileSize={256} />}
+                {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={7} opacity={0.68} zIndex={2} tileSize={256} />}
                 {showWaypoints && waypoints.map((point) => (
                   <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={showLabels} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
                 ))}
@@ -543,17 +545,6 @@ export default function App() {
                   <Text style={styles.importText}>↓  Import Photos</Text>
                 </Pressable>
               </View>
-              <View style={styles.filters}>
-                {['24H', '7D', '30D', 'All'].map((filter) => (
-                  <Pressable
-                    key={filter}
-                    style={[styles.filter, photoFilter === filter && styles.filterActive]}
-                    onPress={() => setPhotoFilter(filter)}
-                  >
-                    <Text style={[styles.filterText, photoFilter === filter && styles.filterTextActive]}>{filter}</Text>
-                  </Pressable>
-                ))}
-              </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {photos.map((uri, index) => (
                   <Pressable style={styles.photoCard} key={uri + index} onPress={() => setActivePhoto(uri)}>
@@ -592,7 +583,7 @@ export default function App() {
               showsCompass
               onLongPress={(event) => addWaypoint(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
             >
-              {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={20} opacity={0.68} zIndex={2} tileSize={256} />}
+              {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={7} opacity={0.68} zIndex={2} tileSize={256} />}
               {showWaypoints && waypoints.map((point) => (
                 <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={showLabels} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
               ))}
@@ -663,7 +654,8 @@ export default function App() {
             <View style={styles.sectionHeading}><View><Text style={styles.eyebrow}>COMMUNITY FIELD INTEL</Text><Text style={styles.pageTitle}>Reports</Text></View><View style={styles.countPill}><Text style={styles.countPillNumber}>{reports.length}</Text><Text style={styles.countPillLabel}>POSTED</Text></View></View>
             <View style={styles.composerCard}>
               <Text style={styles.panelTitle}>Share a field report</Text>
-              <TextInput style={styles.input} placeholder="Location or marsh" placeholderTextColor="#778079" value={reportLocation} onChangeText={setReportLocation} />
+              <TextInput style={styles.input} placeholder="Type a location or select a waypoint" placeholderTextColor="#778079" value={reportLocation} onChangeText={(value) => { setReportLocation(value); setReportWaypointId(''); }} />
+              {!!waypoints.length && <><Text style={styles.pickerLabel}>OR SELECT A WAYPOINT</Text><ScrollView horizontal showsHorizontalScrollIndicator={false}>{waypoints.map((point) => <Pressable key={point.id} style={[styles.waypointChoice, reportWaypointId === point.id && styles.waypointChoiceActive]} onPress={() => { setReportWaypointId(point.id); setReportLocation(point.name); }}><Text style={styles.waypointChoiceIcon}>{WAYPOINT_ICONS[point.type]}</Text><Text style={[styles.waypointChoiceText, reportWaypointId === point.id && styles.waypointChoiceTextActive]}>{point.name}</Text></Pressable>)}</ScrollView></>}
               <View style={styles.inlineInputs}><TextInput style={[styles.input, styles.flex]} placeholder="Bird count" placeholderTextColor="#778079" keyboardType="number-pad" value={reportBirds} onChangeText={setReportBirds} /><TextInput style={[styles.input, styles.flex]} placeholder="Species" placeholderTextColor="#778079" value={reportSpecies} onChangeText={setReportSpecies} /></View>
               <TextInput style={[styles.input, styles.notes]} placeholder="Migration, pressure, species and notes…" placeholderTextColor="#778079" multiline value={reportNotes} onChangeText={setReportNotes} />
               <Pressable style={styles.primaryButton} onPress={publishReport}><Text style={styles.primaryButtonText}>Publish Report</Text></Pressable>
@@ -685,7 +677,7 @@ export default function App() {
           <ScrollView contentContainerStyle={styles.page}>
             <View style={styles.sectionHeading}><View><Text style={styles.eyebrow}>YOUR SEASON</Text><Text style={styles.pageTitle}>Journal</Text></View><Pressable style={styles.addHuntButton} onPress={() => setJournalForm((value) => !value)}><Text style={styles.primaryButtonText}>{journalForm ? 'Close' : '＋ Log Hunt'}</Text></Pressable></View>
             <View style={styles.seasonStats}><View style={styles.statBlock}><Text style={styles.statNumber}>{journalCount}</Text><Text style={styles.statLabel}>HUNTS</Text></View><View style={styles.statDivider} /><View style={styles.statBlock}><Text style={styles.statNumber}>{journalEntries.reduce((sum, entry) => sum + Number(entry.birds || 0), 0)}</Text><Text style={styles.statLabel}>BIRDS SEEN</Text></View><View style={styles.statDivider} /><View style={styles.statBlock}><Text style={styles.statNumber}>{waypoints.length}</Text><Text style={styles.statLabel}>SPOTS</Text></View></View>
-            {journalForm && <View style={styles.composerCard}><Text style={styles.panelTitle}>New hunt entry</Text><TextInput style={styles.input} placeholder="Waypoint or location" placeholderTextColor="#778079" value={journalLocation} onChangeText={setJournalLocation} /><TextInput style={styles.input} placeholder="Birds seen" placeholderTextColor="#778079" keyboardType="number-pad" value={journalBirds} onChangeText={setJournalBirds} /><TextInput style={[styles.input, styles.notes]} placeholder="Conditions, harvest, dog work and notes…" placeholderTextColor="#778079" multiline value={journalNotes} onChangeText={setJournalNotes} /><Pressable style={styles.primaryButton} onPress={logHunt}><Text style={styles.primaryButtonText}>Save Hunt</Text></Pressable></View>}
+            {journalForm && <View style={styles.composerCard}><Text style={styles.panelTitle}>New hunt entry</Text><TextInput style={styles.input} placeholder="Type a location or select a waypoint" placeholderTextColor="#778079" value={journalLocation} onChangeText={(value) => { setJournalLocation(value); setJournalWaypointId(''); }} />{!!waypoints.length && <><Text style={styles.pickerLabel}>OR SELECT A WAYPOINT</Text><ScrollView horizontal showsHorizontalScrollIndicator={false}>{waypoints.map((point) => <Pressable key={point.id} style={[styles.waypointChoice, journalWaypointId === point.id && styles.waypointChoiceActive]} onPress={() => { setJournalWaypointId(point.id); setJournalLocation(point.name); }}><Text style={styles.waypointChoiceIcon}>{WAYPOINT_ICONS[point.type]}</Text><Text style={[styles.waypointChoiceText, journalWaypointId === point.id && styles.waypointChoiceTextActive]}>{point.name}</Text></Pressable>)}</ScrollView></>}<TextInput style={styles.input} placeholder="Birds seen" placeholderTextColor="#778079" keyboardType="number-pad" value={journalBirds} onChangeText={setJournalBirds} /><TextInput style={[styles.input, styles.notes]} placeholder="Conditions, harvest, dog work and notes…" placeholderTextColor="#778079" multiline value={journalNotes} onChangeText={setJournalNotes} /><Pressable style={styles.primaryButton} onPress={logHunt}><Text style={styles.primaryButtonText}>Save Hunt</Text></Pressable></View>}
             {!journalEntries.length && !journalForm && <View style={styles.emptyState}><Text style={styles.emptyStateIcon}>▤</Text><Text style={styles.panelTitle}>Start your season log</Text><Text style={styles.subtle}>Keep locations, conditions, birds and dog work together.</Text></View>}
             {journalEntries.map((entry) => <View style={styles.journalCard} key={entry.id}><View style={styles.journalDate}><Text style={styles.journalDateText}>{entry.createdAt}</Text></View><View style={styles.flex}><Text style={styles.panelTitle}>{entry.location}</Text><Text style={styles.reportDate}>{entry.birds} birds seen</Text><Text style={styles.subtle}>{entry.notes || 'No notes added.'}</Text>{entry.ownerId === session.user.id ? <ShareToggle shared={entry.shared} onPress={() => toggleEntrySharing('journal', entry.id, entry.shared)} /> : <Text style={styles.sharedByLabel}>SHARED BY A LINKED HUNTER</Text>}</View></View>)}
           </ScrollView>
@@ -1148,14 +1140,20 @@ const styles = StyleSheet.create({
   windArrow: { color: ORANGE, fontSize: 19, fontWeight: '900' },
   windSpeed: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
   windDirection: { color: '#9EA8A1', fontSize: 8 },
-  customPin: { minWidth: 34, height: 34, borderRadius: 17, borderWidth: 3, borderColor: '#FFF4E8', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
-  waypointIcon: { color: '#FFFFFF', fontSize: 17, lineHeight: 20, fontWeight: '900' },
-  duckWaypointIcon: { fontSize: 15 },
+  customPin: { minWidth: 25, height: 25, borderRadius: 13, borderWidth: 2, borderColor: '#FFF4E8', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 2 },
+  waypointIcon: { color: '#FFFFFF', fontSize: 12, lineHeight: 14, fontWeight: '900' },
+  duckWaypointIcon: { fontSize: 10 },
   sectionHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   countPill: { minWidth: 58, alignItems: 'center', padding: 8, borderRadius: 12, backgroundColor: '#14231B', borderWidth: 1, borderColor: '#3A4D42' },
   countPillNumber: { color: ORANGE, fontSize: 20, fontWeight: '900' },
   countPillLabel: { color: '#89958D', fontSize: 8, fontWeight: '900' },
   composerCard: { backgroundColor: '#122219', borderWidth: 1, borderColor: '#45594D', borderRadius: 18, padding: 15, gap: 10 },
+  pickerLabel: { color: '#7F8C84', fontSize: 9, fontWeight: '900', letterSpacing: 1.2, marginTop: 2 },
+  waypointChoice: { flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 7, paddingHorizontal: 10, height: 34, borderRadius: 17, borderWidth: 1, borderColor: '#405047', backgroundColor: '#0A1710' },
+  waypointChoiceActive: { backgroundColor: ORANGE, borderColor: ORANGE },
+  waypointChoiceIcon: { fontSize: 12 },
+  waypointChoiceText: { color: '#B4BDB7', fontSize: 10, fontWeight: '800' },
+  waypointChoiceTextActive: { color: '#FFFFFF' },
   inlineInputs: { flexDirection: 'row', gap: 8 },
   emptyState: { alignItems: 'center', backgroundColor: '#0D1B14', borderWidth: 1, borderStyle: 'dashed', borderColor: '#3A4D42', borderRadius: 18, padding: 28, gap: 6 },
   emptyStateIcon: { color: ORANGE, fontSize: 30 },
