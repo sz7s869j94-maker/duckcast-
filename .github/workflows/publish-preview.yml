@@ -1,0 +1,37 @@
+name: Publish DuckCast Preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/publish-preview.yml'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install and align dependencies
+        run: |
+          npm install
+          npx expo install --fix
+          npx expo-doctor@latest
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Publish authenticated preview
+        run: eas update --branch preview --message "DuckCast iPhone preview" --non-interactive
