@@ -11,7 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import MapView, { Marker, Region } from 'react-native-maps';
+import MapView, { Marker, Region, UrlTile } from 'react-native-maps';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
@@ -19,7 +19,9 @@ import { StatusBar } from 'expo-status-bar';
 type Tab = 'Map' | 'Weather' | 'Reports' | 'Journal' | 'Profile';
 type WaypointType = 'Hunt Spot' | 'Camera' | 'Blind' | 'Food Plot' | 'Access';
 type Waypoint = { id: string; name: string; latitude: number; longitude: number; private: boolean; type: WaypointType; color: string };
-type Report = { id: string; location: string; birds: string; species: string; notes: string };
+type Report = { id: string; location: string; birds: string; species: string; notes: string; createdAt: string };
+type HuntEntry = { id: string; location: string; birds: string; notes: string; createdAt: string };
+type WindReading = { speed: number; direction: number };
 type Weather = {
   temperature: number;
   windSpeed: number;
@@ -61,6 +63,7 @@ export default function App() {
   const [reportBirds, setReportBirds] = useState('');
   const [reportNotes, setReportNotes] = useState('');
   const [reports, setReports] = useState<Report[]>([]);
+  const [reportSpecies, setReportSpecies] = useState('Waterfowl');
   const [mapType, setMapType] = useState<'hybrid' | 'satellite'>('hybrid');
   const [photoFilter, setPhotoFilter] = useState('24H');
   const [editing, setEditing] = useState(false);
@@ -68,9 +71,19 @@ export default function App() {
   const [draftName, setDraftName] = useState('');
   const [activePhoto, setActivePhoto] = useState<string | null>(null);
   const [journalCount, setJournalCount] = useState(0);
+  const [journalEntries, setJournalEntries] = useState<HuntEntry[]>([]);
+  const [journalForm, setJournalForm] = useState(false);
+  const [journalLocation, setJournalLocation] = useState('');
+  const [journalBirds, setJournalBirds] = useState('');
+  const [journalNotes, setJournalNotes] = useState('');
   const [mapControls, setMapControls] = useState(false);
   const [showWaypoints, setShowWaypoints] = useState(true);
   const [showLabels, setShowLabels] = useState(true);
+  const [showRadar, setShowRadar] = useState(false);
+  const [showWind, setShowWind] = useState(false);
+  const [radarUrl, setRadarUrl] = useState('');
+  const [radarTime, setRadarTime] = useState('');
+  const [waypointWind, setWaypointWind] = useState<Record<string, WindReading>>({});
   const [forecastRange, setForecastRange] = useState<'Hourly' | '3-Day' | '7-Day'>('Hourly');
   const [draftType, setDraftType] = useState<WaypointType>('Hunt Spot');
   const [draftColor, setDraftColor] = useState(ORANGE);
@@ -87,6 +100,41 @@ export default function App() {
   useEffect(() => {
     if (selected) void refreshWeather(selected);
   }, [selectedId]);
+
+  useEffect(() => {
+    if (showRadar) void refreshRadar();
+  }, [showRadar]);
+
+  useEffect(() => {
+    if (showWind && waypoints.length) void refreshWaypointWind();
+  }, [showWind, waypoints.length]);
+
+  async function refreshRadar() {
+    try {
+      const response = await fetch('https://api.rainviewer.com/public/weather-maps.json');
+      if (!response.ok) throw new Error('Radar unavailable');
+      const data = await response.json();
+      const frames = data.radar?.past ?? [];
+      const latest = frames[frames.length - 1];
+      if (!latest?.path || !data.host) throw new Error('No radar frame');
+      setRadarUrl(`${data.host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`);
+      setRadarTime(new Date(Number(latest.time) * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+    } catch {
+      setShowRadar(false);
+      Alert.alert('Precipitation radar', 'The live radar layer could not be loaded.');
+    }
+  }
+
+  async function refreshWaypointWind() {
+    const readings = await Promise.all(waypoints.map(async (point) => {
+      try {
+        const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${point.latitude}&longitude=${point.longitude}&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=mph`);
+        const data = await response.json();
+        return [point.id, { speed: Number(data.current?.wind_speed_10m ?? 0), direction: Number(data.current?.wind_direction_10m ?? 0) }] as const;
+      } catch { return [point.id, { speed: 0, direction: 0 }] as const; }
+    }));
+    setWaypointWind(Object.fromEntries(readings));
+  }
 
   async function locateUser() {
     try {
@@ -240,8 +288,11 @@ export default function App() {
   }
 
   function logHunt() {
+    if (!journalLocation.trim()) { Alert.alert('Choose a hunt location'); return; }
+    const entry = { id: String(Date.now()), location: journalLocation.trim(), birds: journalBirds.trim() || '0', notes: journalNotes.trim(), createdAt: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }) };
+    setJournalEntries((current) => [entry, ...current]);
     setJournalCount((count) => count + 1);
-    Alert.alert('Hunt logged', 'Your waypoint, time and weather were added to the journal.');
+    setJournalLocation(''); setJournalBirds(''); setJournalNotes(''); setJournalForm(false);
   }
 
   function publishReport() {
@@ -253,8 +304,9 @@ export default function App() {
       id: String(Date.now()),
       location: reportLocation.trim(),
       birds: reportBirds.trim(),
-      species: 'Waterfowl',
+      species: reportSpecies,
       notes: reportNotes.trim(),
+      createdAt: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }),
     }, ...current]);
     setReportBirds('');
     setReportNotes('');
@@ -281,16 +333,9 @@ export default function App() {
                   event.nativeEvent.coordinate.longitude
                 )}
               >
+                {showRadar && !!radarUrl && <UrlTile urlTemplate={radarUrl} maximumZ={12} opacity={0.68} zIndex={2} />}
                 {showWaypoints && waypoints.map((point) => (
-                  <Marker
-                    key={point.id}
-                    coordinate={point}
-                    title={showLabels ? `${point.type}: ${point.name}` : undefined}
-                    pinColor={point.color}
-                    draggable
-                    onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }}
-                    onDragEnd={(event) => moveWaypoint(point, event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
-                  />
+                  <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={showLabels} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
                 ))}
               </MapView>
               <View style={styles.mapTopRow}>
@@ -313,6 +358,7 @@ export default function App() {
               <Pressable style={styles.privatePill} onPress={togglePrivacy}>
                 <Text style={styles.privateText}>▣  {selected.private ? 'Private' : 'Shared'}</Text>
               </Pressable>
+              {showRadar && <View style={styles.radarLegend}><Text style={styles.radarLegendTitle}>PRECIP RADAR · {radarTime || 'LOADING'}</Text><View style={styles.radarColors}><View style={[styles.radarColor, { backgroundColor: '#4BB85B' }]} /><View style={[styles.radarColor, { backgroundColor: '#F2D14D' }]} /><View style={[styles.radarColor, { backgroundColor: '#E64232' }]} /></View></View>}
             </View>
 
             <View style={styles.titleRow}>
@@ -395,8 +441,9 @@ export default function App() {
               showsCompass
               onLongPress={(event) => addWaypoint(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
             >
+              {showRadar && !!radarUrl && <UrlTile urlTemplate={radarUrl} maximumZ={12} opacity={0.68} zIndex={2} />}
               {showWaypoints && waypoints.map((point) => (
-                <Marker key={point.id} coordinate={point} title={showLabels ? `${point.type}: ${point.name}` : undefined} pinColor={point.color} draggable onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onDragEnd={(event) => moveWaypoint(point, event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)} />
+                <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={showLabels} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
               ))}
             </MapView>
             <View style={styles.emptyMapTools}>
@@ -409,6 +456,7 @@ export default function App() {
               <Text style={styles.cleanSlateTitle}>Build your DuckCast map</Text>
               <Text style={styles.cleanSlateText}>Pan and zoom anywhere. Long-press the map to create your first waypoint and load live weather for that exact spot.</Text>
             </View>
+            {showRadar && <View style={styles.fullRadarLegend}><Text style={styles.radarLegendTitle}>PRECIP RADAR · {radarTime || 'LOADING'}</Text><View style={styles.radarColors}><View style={[styles.radarColor, { backgroundColor: '#4BB85B' }]} /><View style={[styles.radarColor, { backgroundColor: '#F2D14D' }]} /><View style={[styles.radarColor, { backgroundColor: '#E64232' }]} /></View></View>}
           </View>
         ))}
 
@@ -461,18 +509,18 @@ export default function App() {
 
         {tab === 'Reports' && (
           <ScrollView contentContainerStyle={styles.page}>
-            <Text style={styles.eyebrow}>COMMUNITY FIELD INTEL</Text>
-            <Text style={styles.pageTitle}>Waterfowl Reports</Text>
-            <View style={styles.panel}>
+            <View style={styles.sectionHeading}><View><Text style={styles.eyebrow}>COMMUNITY FIELD INTEL</Text><Text style={styles.pageTitle}>Reports</Text></View><View style={styles.countPill}><Text style={styles.countPillNumber}>{reports.length}</Text><Text style={styles.countPillLabel}>POSTED</Text></View></View>
+            <View style={styles.composerCard}>
+              <Text style={styles.panelTitle}>Share a field report</Text>
               <TextInput style={styles.input} placeholder="Location or marsh" placeholderTextColor="#778079" value={reportLocation} onChangeText={setReportLocation} />
-              <TextInput style={styles.input} placeholder="Bird count" placeholderTextColor="#778079" keyboardType="number-pad" value={reportBirds} onChangeText={setReportBirds} />
+              <View style={styles.inlineInputs}><TextInput style={[styles.input, styles.flex]} placeholder="Bird count" placeholderTextColor="#778079" keyboardType="number-pad" value={reportBirds} onChangeText={setReportBirds} /><TextInput style={[styles.input, styles.flex]} placeholder="Species" placeholderTextColor="#778079" value={reportSpecies} onChangeText={setReportSpecies} /></View>
               <TextInput style={[styles.input, styles.notes]} placeholder="Migration, pressure, species and notes…" placeholderTextColor="#778079" multiline value={reportNotes} onChangeText={setReportNotes} />
               <Pressable style={styles.primaryButton} onPress={publishReport}><Text style={styles.primaryButtonText}>Publish Report</Text></Pressable>
             </View>
+            {!reports.length && <View style={styles.emptyState}><Text style={styles.emptyStateIcon}>◉</Text><Text style={styles.panelTitle}>No reports yet</Text><Text style={styles.subtle}>Post the first field report for your area.</Text></View>}
             {reports.map((report) => (
-              <View style={styles.panel} key={report.id}>
-                <View style={styles.reportTop}><Text style={styles.panelTitle}>{report.location}</Text><Text style={styles.reportCount}>{report.birds}</Text></View>
-                <Text style={styles.reveal}>{report.species}</Text>
+              <View style={styles.reportCard} key={report.id}>
+                <View style={styles.reportTop}><View><Text style={styles.panelTitle}>{report.location}</Text><Text style={styles.reportDate}>{report.createdAt} · {report.species}</Text></View><View style={styles.birdCountBadge}><Text style={styles.reportCount}>{report.birds}</Text><Text style={styles.birdCountLabel}>BIRDS</Text></View></View>
                 <Text style={styles.subtle}>{report.notes || 'No additional field notes.'}</Text>
               </View>
             ))}
@@ -481,14 +529,11 @@ export default function App() {
 
         {tab === 'Journal' && (
           <ScrollView contentContainerStyle={styles.page}>
-            <Text style={styles.eyebrow}>YOUR SEASON</Text>
-            <Text style={styles.pageTitle}>Hunt Journal</Text>
-            <View style={styles.heroPanel}>
-              <Text style={styles.heroNumber}>{journalCount}</Text>
-              <Text style={styles.heroLabel}>hunts logged this season</Text>
-              <Pressable style={styles.primaryButton} onPress={logHunt}><Text style={styles.primaryButtonText}>＋ Log a Hunt</Text></Pressable>
-            </View>
-            <View style={styles.panel}><Text style={styles.panelTitle}>Your journal is ready</Text><Text style={styles.subtle}>Save weather, location, birds seen, harvest details, dog work and photos after each hunt.</Text></View>
+            <View style={styles.sectionHeading}><View><Text style={styles.eyebrow}>YOUR SEASON</Text><Text style={styles.pageTitle}>Journal</Text></View><Pressable style={styles.addHuntButton} onPress={() => setJournalForm((value) => !value)}><Text style={styles.primaryButtonText}>{journalForm ? 'Close' : '＋ Log Hunt'}</Text></Pressable></View>
+            <View style={styles.seasonStats}><View style={styles.statBlock}><Text style={styles.statNumber}>{journalCount}</Text><Text style={styles.statLabel}>HUNTS</Text></View><View style={styles.statDivider} /><View style={styles.statBlock}><Text style={styles.statNumber}>{journalEntries.reduce((sum, entry) => sum + Number(entry.birds || 0), 0)}</Text><Text style={styles.statLabel}>BIRDS SEEN</Text></View><View style={styles.statDivider} /><View style={styles.statBlock}><Text style={styles.statNumber}>{waypoints.length}</Text><Text style={styles.statLabel}>SPOTS</Text></View></View>
+            {journalForm && <View style={styles.composerCard}><Text style={styles.panelTitle}>New hunt entry</Text><TextInput style={styles.input} placeholder="Waypoint or location" placeholderTextColor="#778079" value={journalLocation} onChangeText={setJournalLocation} /><TextInput style={styles.input} placeholder="Birds seen" placeholderTextColor="#778079" keyboardType="number-pad" value={journalBirds} onChangeText={setJournalBirds} /><TextInput style={[styles.input, styles.notes]} placeholder="Conditions, harvest, dog work and notes…" placeholderTextColor="#778079" multiline value={journalNotes} onChangeText={setJournalNotes} /><Pressable style={styles.primaryButton} onPress={logHunt}><Text style={styles.primaryButtonText}>Save Hunt</Text></Pressable></View>}
+            {!journalEntries.length && !journalForm && <View style={styles.emptyState}><Text style={styles.emptyStateIcon}>▤</Text><Text style={styles.panelTitle}>Start your season log</Text><Text style={styles.subtle}>Keep locations, conditions, birds and dog work together.</Text></View>}
+            {journalEntries.map((entry) => <View style={styles.journalCard} key={entry.id}><View style={styles.journalDate}><Text style={styles.journalDateText}>{entry.createdAt}</Text></View><View style={styles.flex}><Text style={styles.panelTitle}>{entry.location}</Text><Text style={styles.reportDate}>{entry.birds} birds seen</Text><Text style={styles.subtle}>{entry.notes || 'No notes added.'}</Text></View></View>)}
           </ScrollView>
         )}
 
@@ -519,6 +564,12 @@ export default function App() {
             </Pressable>
             <Pressable style={styles.controlRow} onPress={() => setShowLabels((value) => !value)}>
               <Text style={styles.rowTitle}>Waypoint Labels</Text><Text style={styles.controlValue}>{showLabels ? 'ON' : 'OFF'}</Text>
+            </Pressable>
+            <Pressable style={styles.controlRow} onPress={() => setShowRadar((value) => !value)}>
+              <View><Text style={styles.rowTitle}>Precipitation Radar</Text><Text style={styles.controlSub}>Latest live radar frame</Text></View><Text style={styles.controlValue}>{showRadar ? 'ON' : 'OFF'}</Text>
+            </Pressable>
+            <Pressable style={styles.controlRow} onPress={() => setShowWind((value) => !value)}>
+              <View><Text style={styles.rowTitle}>Waypoint Wind</Text><Text style={styles.controlSub}>Compass + speed at each pin</Text></View><Text style={styles.controlValue}>{showWind ? 'ON' : 'OFF'}</Text>
             </Pressable>
             <Pressable style={styles.controlRow} onPress={() => setMapType((value) => value === 'hybrid' ? 'satellite' : 'hybrid')}>
               <Text style={styles.rowTitle}>Map Style</Text><Text style={styles.controlValue}>{mapType.toUpperCase()}</Text>
@@ -610,6 +661,17 @@ function BrandHeader() {
         <Text style={styles.tagline}>{`WATER\nBIRDS\nBETTER\nDAYS.`}</Text>
       </View>
     </View>
+  );
+}
+
+function WindMarker({ point, wind, showWind, showLabel, onPress, onMove }: { point: Waypoint; wind?: WindReading; showWind: boolean; showLabel: boolean; onPress: () => void; onMove: (latitude: number, longitude: number) => void }) {
+  return (
+    <Marker coordinate={point} title={showLabel ? `${point.type}: ${point.name}` : undefined} draggable onPress={onPress} onDragEnd={(event) => onMove(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)} anchor={{ x: 0.5, y: 1 }}>
+      <View style={styles.windMarkerWrap}>
+        {showWind && <View style={styles.windBadge}><Text style={[styles.windArrow, { transform: [{ rotate: `${wind?.direction ?? 0}deg` }] }]}>↑</Text><View><Text style={styles.windSpeed}>{wind ? `${wind.speed.toFixed(0)} mph` : '…'}</Text><Text style={styles.windDirection}>{wind ? `${wind.direction.toFixed(0)}°` : 'loading'}</Text></View></View>}
+        <View style={[styles.customPin, { backgroundColor: point.color }]}><View style={styles.customPinCore} /></View>
+      </View>
+    </Marker>
   );
 }
 
@@ -846,6 +908,7 @@ const styles = StyleSheet.create({
   mapControlTitle: { color: '#EADCCB', fontFamily: 'Georgia', fontSize: 21, fontWeight: '800', marginBottom: 7 },
   controlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 47, borderBottomWidth: 1, borderBottomColor: '#293A31' },
   controlValue: { color: ORANGE, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  controlSub: { color: '#7F8C84', fontSize: 9, marginTop: 2 },
   controlHint: { color: '#7F8C84', fontSize: 10, marginTop: 11, lineHeight: 15 },
   optionWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   typeOption: { paddingHorizontal: 11, paddingVertical: 9, borderRadius: 18, borderWidth: 1, borderColor: '#3A4B41' },
@@ -870,4 +933,37 @@ const styles = StyleSheet.create({
   fullPhoto: { width: '100%', height: '78%' },
   closePhoto: { position: 'absolute', top: 54, right: 20, width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(18,35,27,0.9)', alignItems: 'center', justifyContent: 'center' },
   closePhotoText: { color: '#FFFFFF', fontSize: 30, lineHeight: 32 },
+  radarLegend: { position: 'absolute', left: 12, bottom: 42, backgroundColor: 'rgba(5,13,9,0.88)', borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6 },
+  fullRadarLegend: { position: 'absolute', left: 14, top: 14, backgroundColor: 'rgba(5,13,9,0.88)', borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6 },
+  radarLegendTitle: { color: '#FFFFFF', fontSize: 8, fontWeight: '900', letterSpacing: 0.5 },
+  radarColors: { flexDirection: 'row', marginTop: 4 },
+  radarColor: { width: 28, height: 4 },
+  windMarkerWrap: { alignItems: 'center' },
+  windBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(8,21,16,0.94)', borderWidth: 1, borderColor: '#EADCCB', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 4, marginBottom: 3 },
+  windArrow: { color: ORANGE, fontSize: 19, fontWeight: '900' },
+  windSpeed: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
+  windDirection: { color: '#9EA8A1', fontSize: 8 },
+  customPin: { width: 28, height: 28, borderRadius: 14, borderWidth: 3, borderColor: '#FFF4E8', alignItems: 'center', justifyContent: 'center' },
+  customPinCore: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#FFFFFF' },
+  sectionHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  countPill: { minWidth: 58, alignItems: 'center', padding: 8, borderRadius: 12, backgroundColor: '#14231B', borderWidth: 1, borderColor: '#3A4D42' },
+  countPillNumber: { color: ORANGE, fontSize: 20, fontWeight: '900' },
+  countPillLabel: { color: '#89958D', fontSize: 8, fontWeight: '900' },
+  composerCard: { backgroundColor: '#122219', borderWidth: 1, borderColor: '#45594D', borderRadius: 18, padding: 15, gap: 10 },
+  inlineInputs: { flexDirection: 'row', gap: 8 },
+  emptyState: { alignItems: 'center', backgroundColor: '#0D1B14', borderWidth: 1, borderStyle: 'dashed', borderColor: '#3A4D42', borderRadius: 18, padding: 28, gap: 6 },
+  emptyStateIcon: { color: ORANGE, fontSize: 30 },
+  reportCard: { backgroundColor: '#122219', borderLeftWidth: 4, borderLeftColor: ORANGE, borderRadius: 14, padding: 15, gap: 10 },
+  reportDate: { color: '#8F9A93', fontSize: 11, marginTop: 3 },
+  birdCountBadge: { minWidth: 52, alignItems: 'center', padding: 7, borderRadius: 10, backgroundColor: '#0A1710' },
+  birdCountLabel: { color: '#87928B', fontSize: 8, fontWeight: '900' },
+  addHuntButton: { backgroundColor: ORANGE, borderRadius: 11, paddingHorizontal: 14, paddingVertical: 11 },
+  seasonStats: { flexDirection: 'row', backgroundColor: '#13231B', borderRadius: 17, borderWidth: 1, borderColor: '#3A4D42', paddingVertical: 16 },
+  statBlock: { flex: 1, alignItems: 'center' },
+  statNumber: { color: '#F3E9DB', fontSize: 26, fontWeight: '900' },
+  statLabel: { color: '#87928B', fontSize: 8, fontWeight: '900', marginTop: 2 },
+  statDivider: { width: 1, backgroundColor: '#34463C' },
+  journalCard: { flexDirection: 'row', gap: 12, backgroundColor: '#122219', borderRadius: 14, padding: 14 },
+  journalDate: { width: 48, height: 48, borderRadius: 12, backgroundColor: '#1C3025', alignItems: 'center', justifyContent: 'center' },
+  journalDateText: { color: ORANGE, fontSize: 10, fontWeight: '900', textAlign: 'center' },
 });
