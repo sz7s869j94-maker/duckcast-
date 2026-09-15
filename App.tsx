@@ -223,7 +223,7 @@ export default function App() {
   }, [region.latitude, region.longitude]);
 
   async function refreshLandLayers() {
-    const withinBoundaryScale = region.latitudeDelta * 69 <= 15;
+    const withinBoundaryScale = region.latitudeDelta * 69 <= 5;
     if (!withinBoundaryScale) {
       setParcelGeojson({ type: 'FeatureCollection', features: [] });
       setPublicLandGeojson({});
@@ -262,7 +262,7 @@ export default function App() {
         setPublicLandGeojson(Object.fromEntries(Object.entries(buckets).map(([key, features]) => [key, { type: 'FeatureCollection', features }])));
       } else setPublicLandGeojson({});
       if (showBoundaries && activeState === 'WI') {
-        const response = await fetch(`https://dnrmaps.wi.gov/arcgis/rest/services/DW_Map_Dynamic/EN_County_Tax_Parcels_WTM_Ext_Dynamic_L16/MapServer/0/query?where=1%3D1&outFields=OBJECTID,PARCELID,OWNERNME1,OWNERNME2&${geometryQuery}`);
+        const response = await fetch(`https://dnrmaps.wi.gov/arcgis/rest/services/DW_Map_Dynamic/EN_County_Tax_Parcels_WTM_Ext_Dynamic_L16/MapServer/0/query?where=1%3D1&outFields=OBJECTID,PARCELID,TAXPARCELID,OWNERNME1,OWNERNME2,SITEADRESS,PLACENAME,CONAME,DEEDACRES,GISACRES,PROPCLASS,TAXROLLYEAR&${geometryQuery}`);
         const data = response.ok ? await response.json() : { features: [] };
         setParcelGeojson({ type: 'FeatureCollection', features: data.features ?? [] });
         for (const feature of (data.features ?? []).slice(0, 80)) {
@@ -303,6 +303,23 @@ export default function App() {
       setShowRadar(false);
       Alert.alert('Precipitation radar', 'The live radar layer could not be loaded.');
     }
+  }
+
+  function showParcelDetails(overlay: any) {
+    const details = overlay?.feature?.properties ?? {};
+    const owner = [details.OWNERNME1, details.OWNERNME2].filter(Boolean).join(' ') || 'Not published';
+    const parcelId = details.PARCELID || details.TAXPARCELID || 'Not published';
+    const acres = details.DEEDACRES || details.GISACRES;
+    const rows = [
+      `Owner: ${owner}`,
+      `Parcel: ${parcelId}`,
+      details.SITEADRESS && `Site: ${details.SITEADRESS}`,
+      details.CONAME && `County: ${details.CONAME}`,
+      acres && `Acres: ${Number(acres).toFixed(2)}`,
+      details.PROPCLASS && `Property class: ${details.PROPCLASS}`,
+      details.TAXROLLYEAR && `Tax roll: ${details.TAXROLLYEAR}`,
+    ].filter(Boolean);
+    Alert.alert('Parcel Information', rows.join('\n'));
   }
 
   async function refreshWaypointWind() {
@@ -575,7 +592,7 @@ export default function App() {
                 )}
               >
                 {showPublicLands && <LandLayers data={publicLandGeojson} />}
-                {showBoundaries && <Geojson geojson={parcelGeojson} fillColor="rgba(0,0,0,0)" strokeColor="rgba(255,235,175,0.88)" strokeWidth={0.8} />}
+                {showBoundaries && <Geojson geojson={parcelGeojson} fillColor="rgba(255,235,175,0.02)" strokeColor="rgba(255,235,175,0.88)" strokeWidth={0.8} tappable onPress={showParcelDetails} />}
                 <LandLabels labels={landLabels.filter((label) => label.kind === 'public' ? showPublicLands : showBoundaries)} />
                 {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={7} opacity={0.68} zIndex={2} tileSize={256} />}
                 {showWaypoints && waypoints.map((point) => (
@@ -675,7 +692,7 @@ export default function App() {
               onLongPress={(event) => addWaypoint(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
             >
               {showPublicLands && <LandLayers data={publicLandGeojson} />}
-              {showBoundaries && <Geojson geojson={parcelGeojson} fillColor="rgba(0,0,0,0)" strokeColor="rgba(255,235,175,0.88)" strokeWidth={0.8} />}
+              {showBoundaries && <Geojson geojson={parcelGeojson} fillColor="rgba(255,235,175,0.02)" strokeColor="rgba(255,235,175,0.88)" strokeWidth={0.8} tappable onPress={showParcelDetails} />}
               <LandLabels labels={landLabels.filter((label) => label.kind === 'public' ? showPublicLands : showBoundaries)} />
               {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={7} opacity={0.68} zIndex={2} tileSize={256} />}
               {showWaypoints && waypoints.map((point) => (
@@ -817,7 +834,7 @@ export default function App() {
             <Pressable style={styles.controlRow} onPress={() => setShowBoundaries((value) => !value)}>
               <View><Text style={styles.rowTitle}>Property Boundaries</Text><Text style={styles.controlSub}>{STATE_LAND_SOURCES[activeState]?.parcels ?? 'State source not yet connected'}</Text></View><Text style={styles.controlValue}>{showBoundaries ? 'ON' : 'OFF'}</Text>
             </Pressable>
-            {(showPublicLands || showBoundaries) && region.latitudeDelta * 69 > 15 && <Text style={styles.boundaryHint}>Zoom within 15 miles to load boundaries and names.</Text>}
+            {(showPublicLands || showBoundaries) && region.latitudeDelta * 69 > 5 && <Text style={styles.boundaryHint}>Zoom within 5 miles to load boundaries and names.</Text>}
             {showPublicLands && <View style={styles.landLegend}><View style={[styles.legendDot, { backgroundColor: '#63D47E' }]} /><Text style={styles.legendText}>Open</Text><View style={[styles.legendDot, { backgroundColor: '#F1C453' }]} /><Text style={styles.legendText}>Restricted</Text><View style={[styles.legendDot, { backgroundColor: '#EA6C65' }]} /><Text style={styles.legendText}>Closed</Text><View style={[styles.legendDot, { backgroundColor: '#9A8EB4' }]} /><Text style={styles.legendText}>Unknown</Text></View>}
             <Pressable style={styles.controlRow} onPress={() => setShowRadar((value) => !value)}>
               <View><Text style={styles.rowTitle}>Precipitation Radar</Text><Text style={styles.controlSub}>Continuously animated rolling radar</Text></View><Text style={styles.controlValue}>{showRadar ? 'ON' : 'OFF'}</Text>
