@@ -26,6 +26,7 @@ type Waypoint = { id: string; name: string; latitude: number; longitude: number;
 type Report = { id: string; ownerId: string; location: string; birds: string; species: string; notes: string; createdAt: string; shared: boolean };
 type HuntEntry = { id: string; ownerId: string; location: string; birds: string; notes: string; createdAt: string; shared: boolean };
 type RadarFrame = { url: string; time: string };
+type LandLabel = { id: string; name: string; latitude: number; longitude: number; kind: 'public' | 'parcel' };
 type WindReading = { speed: number; direction: number };
 type LinkedHunter = { id: string; email: string; display_name: string | null };
 type Invitation = { id: string; inviter_id: string; invitee_email: string; status: string };
@@ -100,8 +101,9 @@ export default function App() {
   const [showWind, setShowWind] = useState(false);
   const [showPublicLands, setShowPublicLands] = useState(false);
   const [showBoundaries, setShowBoundaries] = useState(false);
-  const [publicLandGeojson, setPublicLandGeojson] = useState<any>({ type: 'FeatureCollection', features: [] });
+  const [publicLandGeojson, setPublicLandGeojson] = useState<Record<string, any>>({});
   const [parcelGeojson, setParcelGeojson] = useState<any>({ type: 'FeatureCollection', features: [] });
+  const [landLabels, setLandLabels] = useState<LandLabel[]>([]);
   const [radarUrl, setRadarUrl] = useState('');
   const [radarTime, setRadarTime] = useState('');
   const [radarFrames, setRadarFrames] = useState<RadarFrame[]>([]);
@@ -199,24 +201,45 @@ export default function App() {
   }, [region.latitude, region.longitude, region.latitudeDelta, region.longitudeDelta, showPublicLands, showBoundaries]);
 
   async function refreshLandLayers() {
+    const withinBoundaryScale = region.latitudeDelta * 69 <= 15;
+    if (!withinBoundaryScale) {
+      setParcelGeojson({ type: 'FeatureCollection', features: [] });
+      setPublicLandGeojson({});
+      setLandLabels([]);
+      return;
+    }
     const west = region.longitude - region.longitudeDelta / 2;
     const east = region.longitude + region.longitudeDelta / 2;
     const south = region.latitude - region.latitudeDelta / 2;
     const north = region.latitude + region.latitudeDelta / 2;
-    const query = `geometry=${encodeURIComponent(`${west},${south},${east},${north}`)}&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326&spatialRel=esriSpatialRelIntersects&outFields=OBJECTID&returnGeometry=true&f=geojson&resultRecordCount=2000`;
+    const geometryQuery = `geometry=${encodeURIComponent(`${west},${south},${east},${north}`)}&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326&spatialRel=esriSpatialRelIntersects&returnGeometry=true&f=geojson&resultRecordCount=2000`;
+    const nextLabels: LandLabel[] = [];
     try {
       if (showPublicLands) {
-        const layers = await Promise.all([0, 1, 2, 3, 4, 5, 6].map(async (layer) => {
-          const response = await fetch(`https://dnrmaps.wi.gov/arcgis/rest/services/LF_DML/LF_DNR_PUBLIC_LAND_WTM_Ext/MapServer/${layer}/query?where=1%3D1&${query}`);
-          return response.ok ? response.json() : { features: [] };
-        }));
-        setPublicLandGeojson({ type: 'FeatureCollection', features: layers.flatMap((layer) => layer.features ?? []) });
-      } else setPublicLandGeojson({ type: 'FeatureCollection', features: [] });
+        const response = await fetch(`https://services.arcgis.com/v01gqwM5QqNysAAi/arcgis/rest/services/PADUS_Public_Access/FeatureServer/0/query?where=1%3D1&outFields=OBJECTID,Unit_Nm,Pub_Access,MngNm_Desc,DesTp_Desc&${geometryQuery}`);
+        const data = response.ok ? await response.json() : { features: [] };
+        const buckets: Record<string, any[]> = { Open: [], Restricted: [], Closed: [], Unknown: [] };
+        for (const feature of data.features ?? []) {
+          const access = String(feature.properties?.Pub_Access ?? 'Unknown');
+          const bucket = access.startsWith('Open') ? 'Open' : access.startsWith('Restricted') ? 'Restricted' : access.startsWith('Closed') ? 'Closed' : 'Unknown';
+          buckets[bucket]!.push(feature);
+          const center = featureCenter(feature.geometry);
+          const name = feature.properties?.Unit_Nm || feature.properties?.MngNm_Desc || feature.properties?.DesTp_Desc;
+          if (center && name && nextLabels.length < 35 && !nextLabels.some((label) => label.name === name)) nextLabels.push({ id: `public-${feature.id ?? nextLabels.length}`, name, ...center, kind: 'public' });
+        }
+        setPublicLandGeojson(Object.fromEntries(Object.entries(buckets).map(([key, features]) => [key, { type: 'FeatureCollection', features }])));
+      } else setPublicLandGeojson({});
       if (showBoundaries) {
-        const response = await fetch(`https://dnrmaps.wi.gov/arcgis/rest/services/DW_Map_Dynamic/EN_County_Tax_Parcels_WTM_Ext_Dynamic_L16/MapServer/0/query?where=1%3D1&${query}`);
+        const response = await fetch(`https://dnrmaps.wi.gov/arcgis/rest/services/DW_Map_Dynamic/EN_County_Tax_Parcels_WTM_Ext_Dynamic_L16/MapServer/0/query?where=1%3D1&outFields=OBJECTID,PARCELID,OWNERNME1,OWNERNME2&${geometryQuery}`);
         const data = response.ok ? await response.json() : { features: [] };
         setParcelGeojson({ type: 'FeatureCollection', features: data.features ?? [] });
+        for (const feature of (data.features ?? []).slice(0, 80)) {
+          const center = featureCenter(feature.geometry);
+          const owner = [feature.properties?.OWNERNME1, feature.properties?.OWNERNME2].filter(Boolean).join(' ');
+          if (center && owner) nextLabels.push({ id: `parcel-${feature.id}`, name: owner, ...center, kind: 'parcel' });
+        }
       } else setParcelGeojson({ type: 'FeatureCollection', features: [] });
+      setLandLabels(nextLabels);
     } catch {
       Alert.alert('Land layers', 'Land boundary data could not be loaded for this map area.');
     }
@@ -519,8 +542,9 @@ export default function App() {
                   event.nativeEvent.coordinate.longitude
                 )}
               >
-                {showPublicLands && <Geojson geojson={publicLandGeojson} fillColor="rgba(55,155,76,0.28)" strokeColor="#71D184" strokeWidth={1.2} />}
+                {showPublicLands && <LandLayers data={publicLandGeojson} />}
                 {showBoundaries && <Geojson geojson={parcelGeojson} fillColor="rgba(0,0,0,0)" strokeColor="rgba(255,235,175,0.88)" strokeWidth={0.8} />}
+                <LandLabels labels={landLabels.filter((label) => label.kind === 'public' ? showPublicLands : showBoundaries)} />
                 {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={7} opacity={0.68} zIndex={2} tileSize={256} />}
                 {showWaypoints && waypoints.map((point) => (
                   <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={selectedId === point.id} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
@@ -618,8 +642,9 @@ export default function App() {
               showsCompass
               onLongPress={(event) => addWaypoint(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
             >
-              {showPublicLands && <Geojson geojson={publicLandGeojson} fillColor="rgba(55,155,76,0.28)" strokeColor="#71D184" strokeWidth={1.2} />}
+              {showPublicLands && <LandLayers data={publicLandGeojson} />}
               {showBoundaries && <Geojson geojson={parcelGeojson} fillColor="rgba(0,0,0,0)" strokeColor="rgba(255,235,175,0.88)" strokeWidth={0.8} />}
+              <LandLabels labels={landLabels.filter((label) => label.kind === 'public' ? showPublicLands : showBoundaries)} />
               {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={7} opacity={0.68} zIndex={2} tileSize={256} />}
               {showWaypoints && waypoints.map((point) => (
                 <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={selectedId === point.id} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
@@ -754,11 +779,13 @@ export default function App() {
               <Text style={styles.rowTitle}>Waypoints</Text><Text style={styles.controlValue}>{showWaypoints ? 'ON' : 'OFF'}</Text>
             </Pressable>
             <Pressable style={styles.controlRow} onPress={() => setShowPublicLands((value) => !value)}>
-              <View><Text style={styles.rowTitle}>Public Access Lands</Text><Text style={styles.controlSub}>Wisconsin DNR, county and federal lands</Text></View><Text style={styles.controlValue}>{showPublicLands ? 'ON' : 'OFF'}</Text>
+              <View><Text style={styles.rowTitle}>Nationwide Public Lands</Text><Text style={styles.controlSub}>Access status + land and manager names</Text></View><Text style={styles.controlValue}>{showPublicLands ? 'ON' : 'OFF'}</Text>
             </Pressable>
             <Pressable style={styles.controlRow} onPress={() => setShowBoundaries((value) => !value)}>
-              <View><Text style={styles.rowTitle}>Property Boundaries</Text><Text style={styles.controlSub}>Wisconsin statewide parcel lines</Text></View><Text style={styles.controlValue}>{showBoundaries ? 'ON' : 'OFF'}</Text>
+              <View><Text style={styles.rowTitle}>Property Boundaries</Text><Text style={styles.controlSub}>Owner names where public records allow</Text></View><Text style={styles.controlValue}>{showBoundaries ? 'ON' : 'OFF'}</Text>
             </Pressable>
+            {(showPublicLands || showBoundaries) && region.latitudeDelta * 69 > 15 && <Text style={styles.boundaryHint}>Zoom within 15 miles to load boundaries and names.</Text>}
+            {showPublicLands && <View style={styles.landLegend}><View style={[styles.legendDot, { backgroundColor: '#63D47E' }]} /><Text style={styles.legendText}>Open</Text><View style={[styles.legendDot, { backgroundColor: '#F1C453' }]} /><Text style={styles.legendText}>Restricted</Text><View style={[styles.legendDot, { backgroundColor: '#EA6C65' }]} /><Text style={styles.legendText}>Closed</Text><View style={[styles.legendDot, { backgroundColor: '#9A8EB4' }]} /><Text style={styles.legendText}>Unknown</Text></View>}
             <Pressable style={styles.controlRow} onPress={() => setShowRadar((value) => !value)}>
               <View><Text style={styles.rowTitle}>Precipitation Radar</Text><Text style={styles.controlSub}>Continuously animated rolling radar</Text></View><Text style={styles.controlValue}>{showRadar ? 'ON' : 'OFF'}</Text>
             </Pressable>
@@ -839,6 +866,44 @@ export default function App() {
       <BottomTabs active={tab} onChange={setTab} />
     </SafeAreaView>
   );
+}
+
+function featureCenter(geometry: any) {
+  const points: Array<{ latitude: number; longitude: number }> = [];
+  const walk = (coordinates: any) => {
+    if (Array.isArray(coordinates) && typeof coordinates[0] === 'number' && typeof coordinates[1] === 'number') {
+      points.push({ longitude: coordinates[0], latitude: coordinates[1] });
+    } else if (Array.isArray(coordinates)) coordinates.forEach(walk);
+  };
+  walk(geometry?.coordinates);
+  if (!points.length) return null;
+  const latitudes = points.map((point) => point.latitude);
+  const longitudes = points.map((point) => point.longitude);
+  return {
+    latitude: (Math.min(...latitudes) + Math.max(...latitudes)) / 2,
+    longitude: (Math.min(...longitudes) + Math.max(...longitudes)) / 2,
+  };
+}
+
+const EMPTY_COLLECTION = { type: 'FeatureCollection', features: [] };
+
+function LandLayers({ data }: { data: Record<string, any> }) {
+  return <>
+    <Geojson geojson={data.Open ?? EMPTY_COLLECTION} fillColor="rgba(44,160,78,0.32)" strokeColor="#63D47E" strokeWidth={1.2} />
+    <Geojson geojson={data.Restricted ?? EMPTY_COLLECTION} fillColor="rgba(230,174,55,0.28)" strokeColor="#F1C453" strokeWidth={1.2} />
+    <Geojson geojson={data.Closed ?? EMPTY_COLLECTION} fillColor="rgba(198,70,63,0.25)" strokeColor="#EA6C65" strokeWidth={1.2} />
+    <Geojson geojson={data.Unknown ?? EMPTY_COLLECTION} fillColor="rgba(123,111,150,0.22)" strokeColor="#9A8EB4" strokeWidth={1.2} />
+  </>;
+}
+
+function LandLabels({ labels }: { labels: LandLabel[] }) {
+  return <>{labels.map((label) => (
+    <Marker key={label.id} coordinate={label} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+      <View style={[styles.landLabel, label.kind === 'public' ? styles.publicLandLabel : styles.parcelLandLabel]}>
+        <Text numberOfLines={1} style={styles.landLabelText}>{label.name}</Text>
+      </View>
+    </Marker>
+  ))}</>;
 }
 
 function groupGrants(rows: Record<string, string>[], key: string) {
@@ -1007,6 +1072,14 @@ const styles = StyleSheet.create({
   cleanSlateCard: { position: 'absolute', left: 15, right: 15, bottom: 18, padding: 16, borderRadius: 15, backgroundColor: 'rgba(8,21,16,0.94)', borderWidth: 1, borderColor: '#536158' },
   cleanSlateTitle: { color: '#EADCCB', fontFamily: 'Georgia', fontSize: 21, fontWeight: '800' },
   cleanSlateText: { color: '#A5AEA8', lineHeight: 19, marginTop: 5 },
+  landLabel: { maxWidth: 138, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 5, borderWidth: 1 },
+  publicLandLabel: { backgroundColor: 'rgba(8,35,19,0.88)', borderColor: '#63D47E' },
+  parcelLandLabel: { backgroundColor: 'rgba(24,22,14,0.88)', borderColor: '#FFEBAF' },
+  landLabelText: { color: '#FFFFFF', fontSize: 8, fontWeight: '800' },
+  boundaryHint: { color: '#F1C453', fontSize: 11, lineHeight: 15, paddingHorizontal: 12, paddingBottom: 7 },
+  landLegend: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5, paddingHorizontal: 12, paddingBottom: 8 },
+  legendDot: { width: 9, height: 9, borderRadius: 2, marginLeft: 4 },
+  legendText: { color: '#AAB3AD', fontSize: 9, marginRight: 2 },
   mapCard: { height: 285, borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: '#38463F', backgroundColor: '#1A2A20' },
   mapTopRow: { position: 'absolute', top: 10, left: 10, right: 10, flexDirection: 'row', justifyContent: 'space-between' },
   glassButton: { backgroundColor: 'rgba(5,13,9,0.78)', paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12 },
