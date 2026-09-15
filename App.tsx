@@ -19,7 +19,7 @@ import type { Session } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 
-// DuckCast live preview: private by default, shared only through accepted email links.
+// DuckCast Expo Go preview: private by default, shared only through accepted email links.
 
 type Tab = 'Map' | 'Weather' | 'Reports' | 'Journal' | 'Profile';
 type WaypointType = 'Hunt Spot' | 'Camera' | 'Blind' | 'Food Plot' | 'Access';
