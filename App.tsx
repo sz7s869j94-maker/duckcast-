@@ -60,6 +60,16 @@ const DEFAULT_REGION: Region = {
   longitudeDelta: 0.18,
 };
 
+const STATE_CODES: Record<string, string> = {
+  Alabama: 'AL', Alaska: 'AK', Arizona: 'AZ', Arkansas: 'AR', California: 'CA', Colorado: 'CO', Connecticut: 'CT', Delaware: 'DE', Florida: 'FL', Georgia: 'GA', Hawaii: 'HI', Idaho: 'ID', Illinois: 'IL', Indiana: 'IN', Iowa: 'IA', Kansas: 'KS', Kentucky: 'KY', Louisiana: 'LA', Maine: 'ME', Maryland: 'MD', Massachusetts: 'MA', Michigan: 'MI', Minnesota: 'MN', Mississippi: 'MS', Missouri: 'MO', Montana: 'MT', Nebraska: 'NE', Nevada: 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ', 'New Mexico': 'NM', 'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', Ohio: 'OH', Oklahoma: 'OK', Oregon: 'OR', Pennsylvania: 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC', 'South Dakota': 'SD', Tennessee: 'TN', Texas: 'TX', Utah: 'UT', Vermont: 'VT', Virginia: 'VA', Washington: 'WA', 'West Virginia': 'WV', Wisconsin: 'WI', Wyoming: 'WY',
+};
+
+const STATE_LAND_SOURCES: Record<string, { name: string; publicDetail: string; parcels?: string }> = Object.fromEntries(
+  Object.entries(STATE_CODES).map(([name, code]) => [code, { name, publicDetail: 'USGS PAD-US + federal, state, local and nonprofit lands' }])
+);
+STATE_LAND_SOURCES.WI = { name: 'Wisconsin', publicDetail: 'PAD-US + Wisconsin public-access and MFL coverage', parcels: 'Wisconsin Statewide Parcel Map' };
+STATE_LAND_SOURCES.AR = { name: 'Arkansas', publicDetail: 'PAD-US + Arkansas Game & Fish WMA boundaries' };
+
 const samplePhotos = [
   'https://images.unsplash.com/photo-1473445361085-b9a07f55608b?auto=format&fit=crop&w=700&q=80',
   'https://images.unsplash.com/photo-1500463959177-e0869687df26?auto=format&fit=crop&w=700&q=80',
@@ -101,6 +111,7 @@ export default function App() {
   const [showWind, setShowWind] = useState(false);
   const [showPublicLands, setShowPublicLands] = useState(false);
   const [showBoundaries, setShowBoundaries] = useState(false);
+  const [activeState, setActiveState] = useState('WI');
   const [publicLandGeojson, setPublicLandGeojson] = useState<Record<string, any>>({});
   const [parcelGeojson, setParcelGeojson] = useState<any>({ type: 'FeatureCollection', features: [] });
   const [landLabels, setLandLabels] = useState<LandLabel[]>([]);
@@ -198,7 +209,18 @@ export default function App() {
     if (!showPublicLands && !showBoundaries) return;
     const timer = setTimeout(() => void refreshLandLayers(), 700);
     return () => clearTimeout(timer);
-  }, [region.latitude, region.longitude, region.latitudeDelta, region.longitudeDelta, showPublicLands, showBoundaries]);
+  }, [region.latitude, region.longitude, region.latitudeDelta, region.longitudeDelta, showPublicLands, showBoundaries, activeState]);
+
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        const places = await Location.reverseGeocodeAsync({ latitude: region.latitude, longitude: region.longitude });
+        const state = places[0]?.region;
+        if (state) setActiveState(STATE_CODES[state] ?? state.toUpperCase().slice(0, 2));
+      } catch { /* Keep the last confirmed state when reverse geocoding is unavailable. */ }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [region.latitude, region.longitude]);
 
   async function refreshLandLayers() {
     const withinBoundaryScale = region.latitudeDelta * 69 <= 15;
@@ -227,9 +249,19 @@ export default function App() {
           const name = feature.properties?.Unit_Nm || feature.properties?.MngNm_Desc || feature.properties?.DesTp_Desc;
           if (center && name && nextLabels.length < 35 && !nextLabels.some((label) => label.name === name)) nextLabels.push({ id: `public-${feature.id ?? nextLabels.length}`, name, ...center, kind: 'public' });
         }
+        if (activeState === 'AR') {
+          const arResponse = await fetch(`https://gis.arkansas.gov/arcgis/rest/services/FEATURESERVICES/Boundaries/FeatureServer/37/query?where=1%3D1&outFields=objectid,fname,flabel,wma&${geometryQuery}`);
+          const arData = arResponse.ok ? await arResponse.json() : { features: [] };
+          for (const feature of arData.features ?? []) {
+            buckets.Open!.push(feature);
+            const center = featureCenter(feature.geometry);
+            const name = feature.properties?.fname || feature.properties?.flabel || feature.properties?.wma;
+            if (center && name && nextLabels.length < 35 && !nextLabels.some((label) => label.name === name)) nextLabels.push({ id: `ar-wma-${feature.id ?? nextLabels.length}`, name, ...center, kind: 'public' });
+          }
+        }
         setPublicLandGeojson(Object.fromEntries(Object.entries(buckets).map(([key, features]) => [key, { type: 'FeatureCollection', features }])));
       } else setPublicLandGeojson({});
-      if (showBoundaries) {
+      if (showBoundaries && activeState === 'WI') {
         const response = await fetch(`https://dnrmaps.wi.gov/arcgis/rest/services/DW_Map_Dynamic/EN_County_Tax_Parcels_WTM_Ext_Dynamic_L16/MapServer/0/query?where=1%3D1&outFields=OBJECTID,PARCELID,OWNERNME1,OWNERNME2&${geometryQuery}`);
         const data = response.ok ? await response.json() : { features: [] };
         setParcelGeojson({ type: 'FeatureCollection', features: data.features ?? [] });
@@ -774,7 +806,8 @@ export default function App() {
       <Modal visible={mapControls} transparent animationType="fade" onRequestClose={() => setMapControls(false)}>
         <Pressable style={styles.controlBackdrop} onPress={() => setMapControls(false)}>
           <View style={styles.mapControlCard}>
-            <Text style={styles.mapControlTitle}>Map Display</Text>
+            <Text style={styles.mapControlTitle}>Map Display · {activeState}</Text>
+            <Text style={styles.stateSource}>{STATE_LAND_SOURCES[activeState]?.name ?? activeState}: {STATE_LAND_SOURCES[activeState]?.publicDetail ?? 'nationwide public-land coverage'}</Text>
             <Pressable style={styles.controlRow} onPress={() => setShowWaypoints((value) => !value)}>
               <Text style={styles.rowTitle}>Waypoints</Text><Text style={styles.controlValue}>{showWaypoints ? 'ON' : 'OFF'}</Text>
             </Pressable>
@@ -782,7 +815,7 @@ export default function App() {
               <View><Text style={styles.rowTitle}>Nationwide Public Lands</Text><Text style={styles.controlSub}>Access status + land and manager names</Text></View><Text style={styles.controlValue}>{showPublicLands ? 'ON' : 'OFF'}</Text>
             </Pressable>
             <Pressable style={styles.controlRow} onPress={() => setShowBoundaries((value) => !value)}>
-              <View><Text style={styles.rowTitle}>Property Boundaries</Text><Text style={styles.controlSub}>Owner names where public records allow</Text></View><Text style={styles.controlValue}>{showBoundaries ? 'ON' : 'OFF'}</Text>
+              <View><Text style={styles.rowTitle}>Property Boundaries</Text><Text style={styles.controlSub}>{STATE_LAND_SOURCES[activeState]?.parcels ?? 'State source not yet connected'}</Text></View><Text style={styles.controlValue}>{showBoundaries ? 'ON' : 'OFF'}</Text>
             </Pressable>
             {(showPublicLands || showBoundaries) && region.latitudeDelta * 69 > 15 && <Text style={styles.boundaryHint}>Zoom within 15 miles to load boundaries and names.</Text>}
             {showPublicLands && <View style={styles.landLegend}><View style={[styles.legendDot, { backgroundColor: '#63D47E' }]} /><Text style={styles.legendText}>Open</Text><View style={[styles.legendDot, { backgroundColor: '#F1C453' }]} /><Text style={styles.legendText}>Restricted</Text><View style={[styles.legendDot, { backgroundColor: '#EA6C65' }]} /><Text style={styles.legendText}>Closed</Text><View style={[styles.legendDot, { backgroundColor: '#9A8EB4' }]} /><Text style={styles.legendText}>Unknown</Text></View>}
@@ -1211,6 +1244,7 @@ const styles = StyleSheet.create({
   controlBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.42)' },
   mapControlCard: { position: 'absolute', top: 128, right: 18, width: 245, backgroundColor: '#0E1D15', borderRadius: 17, borderWidth: 1, borderColor: '#506158', padding: 15 },
   mapControlTitle: { color: '#EADCCB', fontFamily: 'Georgia', fontSize: 21, fontWeight: '800', marginBottom: 7 },
+  stateSource: { color: '#91A69A', fontSize: 9, lineHeight: 13, marginBottom: 5 },
   controlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 47, borderBottomWidth: 1, borderBottomColor: '#293A31' },
   controlValue: { color: ORANGE, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
   controlSub: { color: '#7F8C84', fontSize: 9, marginTop: 2 },
