@@ -16,6 +16,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
 import type { Session } from '@supabase/supabase-js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 
 // DuckCast live preview: private by default, shared only through accepted email links.
@@ -40,7 +41,7 @@ type Weather = {
   humidity: number;
   condition: string;
   updatedAt: string;
-  hourly: { time: string; temp: number; wind: number }[];
+  hourly: { time: string; temp: number; wind: number; precipChance: number }[];
   daily: { date: string; high: number; low: number; rainChance: number; rain: number; wind: number }[];
 };
 
@@ -106,6 +107,7 @@ export default function App() {
   const [journalNotes, setJournalNotes] = useState('');
   const [journalWaypointId, setJournalWaypointId] = useState('');
   const [mapControls, setMapControls] = useState(false);
+  const [showMapTip, setShowMapTip] = useState(false);
   const [showWaypoints, setShowWaypoints] = useState(true);
   const [showRadar, setShowRadar] = useState(false);
   const [showWind, setShowWind] = useState(false);
@@ -120,7 +122,7 @@ export default function App() {
   const [radarFrames, setRadarFrames] = useState<RadarFrame[]>([]);
   const [radarFrameIndex, setRadarFrameIndex] = useState(0);
   const [waypointWind, setWaypointWind] = useState<Record<string, WindReading>>({});
-  const [forecastRange, setForecastRange] = useState<'Hourly' | '24 Hours' | '7-Day'>('Hourly');
+  const [forecastRange, setForecastRange] = useState<'Hourly' | '24 Hours' | '72 Hours' | '7-Day'>('Hourly');
   const [draftType, setDraftType] = useState<WaypointType>('Hunt Spot');
   const [draftColor, setDraftColor] = useState(ORANGE);
   const [linkedHunters, setLinkedHunters] = useState<LinkedHunter[]>([]);
@@ -138,7 +140,13 @@ export default function App() {
 
   useEffect(() => {
     void locateUser();
+    AsyncStorage.getItem('duckcast-map-tip-seen').then((seen) => setShowMapTip(seen !== '1'));
   }, []);
+
+  function dismissMapTip() {
+    setShowMapTip(false);
+    void AsyncStorage.setItem('duckcast-map-tip-seen', '1');
+  }
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => { setSession(data.session); setAuthReady(true); });
@@ -375,7 +383,7 @@ export default function App() {
     if (!target) return;
     try {
       setWeatherLoading(true);
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${target.latitude}&longitude=${target.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure&hourly=temperature_2m,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,rain_sum,wind_speed_10m_max&past_days=7&forecast_days=7&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto`;
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${target.latitude}&longitude=${target.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure&hourly=temperature_2m,wind_speed_10m,precipitation_probability&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,rain_sum,wind_speed_10m_max&past_days=7&forecast_days=7&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto`;
       const response = await fetch(url);
       if (!response.ok) throw new Error('Weather service unavailable');
       const data = await response.json();
@@ -384,6 +392,7 @@ export default function App() {
       const times = (data.hourly?.time ?? []) as string[];
       const temps = (data.hourly?.temperature_2m ?? []) as number[];
       const winds = (data.hourly?.wind_speed_10m ?? []) as number[];
+      const precip = (data.hourly?.precipitation_probability ?? []) as number[];
       const nowIndex = Math.max(0, times.findIndex((time) => new Date(time).getTime() >= Date.now()));
       setWeather({
         temperature: Number(data.current?.temperature_2m ?? 0),
@@ -394,10 +403,11 @@ export default function App() {
         humidity: Number(data.current?.relative_humidity_2m ?? 0),
         condition: codes[Number(data.current?.weather_code)] ?? 'Current Conditions',
         updatedAt: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        hourly: times.slice(nowIndex, nowIndex + 24).map((time, index) => ({
+        hourly: times.slice(nowIndex, nowIndex + 72).map((time, index) => ({
           time: new Date(time).toLocaleTimeString([], { hour: 'numeric' }),
           temp: Number(temps[nowIndex + index] ?? 0),
           wind: Number(winds[nowIndex + index] ?? 0),
+          precipChance: Number(precip[nowIndex + index] ?? 0),
         })),
         daily: ((data.daily?.time ?? []) as string[]).slice(-7).map((date, index) => ({
           date: new Date(date + 'T12:00:00').toLocaleDateString([], { weekday: 'short' }),
@@ -705,10 +715,11 @@ export default function App() {
               </Pressable>
               <Pressable style={styles.squareButton} onPress={locateUser}><Text style={styles.toolIcon}>➤</Text></Pressable>
             </View>
-            <View style={styles.cleanSlateCard}>
+            {showMapTip && <View style={styles.cleanSlateCard}>
+              <Pressable style={styles.tipClose} onPress={dismissMapTip}><Text style={styles.tipCloseText}>×</Text></Pressable>
               <Text style={styles.cleanSlateTitle}>Build your DuckCast map</Text>
               <Text style={styles.cleanSlateText}>Pan and zoom anywhere. Long-press the map to create your first waypoint and load live weather for that exact spot.</Text>
-            </View>
+            </View>}
             {showRadar && <View style={styles.fullRadarLegend}><Text style={styles.radarLegendTitle}>PRECIP RADAR · {radarTime || 'LOADING'}</Text><View style={styles.radarColors}><View style={[styles.radarColor, { backgroundColor: '#4BB85B' }]} /><View style={[styles.radarColor, { backgroundColor: '#F2D14D' }]} /><View style={[styles.radarColor, { backgroundColor: '#E64232' }]} /></View></View>}
           </View>
         ))}
@@ -719,18 +730,19 @@ export default function App() {
             <Text style={styles.pageTitle}>Marsh Weather</Text>
             <WeatherPanel weather={weather} loading={weatherLoading} onRefresh={() => refreshWeather()} />
             <View style={styles.forecastTabs}>
-              {(['Hourly', '24 Hours', '7-Day'] as const).map((range) => (
+              {(['Hourly', '24 Hours', '72 Hours', '7-Day'] as const).map((range) => (
                 <Pressable key={range} style={[styles.forecastTab, forecastRange === range && styles.forecastTabActive]} onPress={() => setForecastRange(range)}>
                   <Text style={[styles.forecastTabText, forecastRange === range && styles.forecastTabTextActive]}>{range}</Text>
                 </Pressable>
               ))}
             </View>
-            {weather && (forecastRange === 'Hourly' || forecastRange === '24 Hours') && (
+            {weather && forecastRange !== '7-Day' && (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.largeForecastRail}>
-                {weather.hourly.slice(0, forecastRange === 'Hourly' ? 12 : 24).map((hour) => (
-                  <View style={styles.largeHourCard} key={hour.time}>
+                {weather.hourly.slice(0, forecastRange === 'Hourly' ? 12 : forecastRange === '24 Hours' ? 24 : 72).map((hour, index) => (
+                  <View style={styles.largeHourCard} key={`${hour.time}-${index}`}>
                     <Text style={styles.hourTime}>{hour.time}</Text>
                     <Text style={styles.largeHourTemp}>{hour.temp.toFixed(0)}°</Text>
+                    <Text style={styles.hourRain}>● {hour.precipChance.toFixed(0)}%</Text>
                     <Text style={styles.hourWind}>➤ {hour.wind.toFixed(0)} mph</Text>
                   </View>
                 ))}
@@ -766,7 +778,7 @@ export default function App() {
             <View style={styles.composerCard}>
               <Text style={styles.panelTitle}>Share a field report</Text>
               <TextInput style={styles.input} placeholder="Type a location or select a waypoint" placeholderTextColor="#778079" value={reportLocation} onChangeText={(value) => { setReportLocation(value); setReportWaypointId(''); }} />
-              {!!waypoints.length && <><Text style={styles.pickerLabel}>OR SELECT A WAYPOINT</Text><ScrollView horizontal showsHorizontalScrollIndicator={false}>{waypoints.map((point) => <Pressable key={point.id} style={[styles.waypointChoice, reportWaypointId === point.id && styles.waypointChoiceActive]} onPress={() => { setReportWaypointId(point.id); setReportLocation(point.name); }}><Text style={styles.waypointChoiceIcon}>{WAYPOINT_ICONS[point.type]}</Text><Text style={[styles.waypointChoiceText, reportWaypointId === point.id && styles.waypointChoiceTextActive]}>{point.name}</Text></Pressable>)}</ScrollView></>}
+              {!!waypoints.length && <><Text style={styles.pickerLabel}>OR SELECT A WAYPOINT</Text><WaypointDropdown waypoints={waypoints} selectedId={reportWaypointId} onSelect={(point) => { setReportWaypointId(point.id); setReportLocation(point.name); }} /></>}
               <View style={styles.inlineInputs}><TextInput style={[styles.input, styles.flex]} placeholder="Bird count" placeholderTextColor="#778079" keyboardType="number-pad" value={reportBirds} onChangeText={setReportBirds} /><TextInput style={[styles.input, styles.flex]} placeholder="Species" placeholderTextColor="#778079" value={reportSpecies} onChangeText={setReportSpecies} /></View>
               <TextInput style={[styles.input, styles.notes]} placeholder="Migration, pressure, species and notes…" placeholderTextColor="#778079" multiline value={reportNotes} onChangeText={setReportNotes} />
               <Pressable style={styles.primaryButton} onPress={publishReport}><Text style={styles.primaryButtonText}>Publish Report</Text></Pressable>
@@ -788,7 +800,7 @@ export default function App() {
           <ScrollView contentContainerStyle={styles.page}>
             <View style={styles.sectionHeading}><View><Text style={styles.eyebrow}>YOUR SEASON</Text><Text style={styles.pageTitle}>Journal</Text></View><Pressable style={styles.addHuntButton} onPress={() => setJournalForm((value) => !value)}><Text style={styles.primaryButtonText}>{journalForm ? 'Close' : '＋ Log Hunt'}</Text></Pressable></View>
             <View style={styles.seasonStats}><View style={styles.statBlock}><Text style={styles.statNumber}>{journalCount}</Text><Text style={styles.statLabel}>HUNTS</Text></View><View style={styles.statDivider} /><View style={styles.statBlock}><Text style={styles.statNumber}>{journalEntries.reduce((sum, entry) => sum + Number(entry.birds || 0), 0)}</Text><Text style={styles.statLabel}>BIRDS SEEN</Text></View><View style={styles.statDivider} /><View style={styles.statBlock}><Text style={styles.statNumber}>{waypoints.length}</Text><Text style={styles.statLabel}>SPOTS</Text></View></View>
-            {journalForm && <View style={styles.composerCard}><Text style={styles.panelTitle}>New hunt entry</Text><TextInput style={styles.input} placeholder="Type a location or select a waypoint" placeholderTextColor="#778079" value={journalLocation} onChangeText={(value) => { setJournalLocation(value); setJournalWaypointId(''); }} />{!!waypoints.length && <><Text style={styles.pickerLabel}>OR SELECT A WAYPOINT</Text><ScrollView horizontal showsHorizontalScrollIndicator={false}>{waypoints.map((point) => <Pressable key={point.id} style={[styles.waypointChoice, journalWaypointId === point.id && styles.waypointChoiceActive]} onPress={() => { setJournalWaypointId(point.id); setJournalLocation(point.name); }}><Text style={styles.waypointChoiceIcon}>{WAYPOINT_ICONS[point.type]}</Text><Text style={[styles.waypointChoiceText, journalWaypointId === point.id && styles.waypointChoiceTextActive]}>{point.name}</Text></Pressable>)}</ScrollView></>}<TextInput style={styles.input} placeholder="Birds seen" placeholderTextColor="#778079" keyboardType="number-pad" value={journalBirds} onChangeText={setJournalBirds} /><TextInput style={[styles.input, styles.notes]} placeholder="Conditions, harvest, dog work and notes…" placeholderTextColor="#778079" multiline value={journalNotes} onChangeText={setJournalNotes} /><Pressable style={styles.primaryButton} onPress={logHunt}><Text style={styles.primaryButtonText}>Save Hunt</Text></Pressable></View>}
+            {journalForm && <View style={styles.composerCard}><Text style={styles.panelTitle}>New hunt entry</Text><TextInput style={styles.input} placeholder="Type a location or select a waypoint" placeholderTextColor="#778079" value={journalLocation} onChangeText={(value) => { setJournalLocation(value); setJournalWaypointId(''); }} />{!!waypoints.length && <><Text style={styles.pickerLabel}>OR SELECT A WAYPOINT</Text><WaypointDropdown waypoints={waypoints} selectedId={journalWaypointId} onSelect={(point) => { setJournalWaypointId(point.id); setJournalLocation(point.name); }} /></>}<TextInput style={styles.input} placeholder="Birds seen" placeholderTextColor="#778079" keyboardType="number-pad" value={journalBirds} onChangeText={setJournalBirds} /><TextInput style={[styles.input, styles.notes]} placeholder="Conditions, harvest, dog work and notes…" placeholderTextColor="#778079" multiline value={journalNotes} onChangeText={setJournalNotes} /><Pressable style={styles.primaryButton} onPress={logHunt}><Text style={styles.primaryButtonText}>Save Hunt</Text></Pressable></View>}
             {!journalEntries.length && !journalForm && <View style={styles.emptyState}><Text style={styles.emptyStateIcon}>▤</Text><Text style={styles.panelTitle}>Start your season log</Text><Text style={styles.subtle}>Keep locations, conditions, birds and dog work together.</Text></View>}
             {journalEntries.map((entry) => <View style={styles.journalCard} key={entry.id}><View style={styles.journalDate}><Text style={styles.journalDateText}>{entry.createdAt}</Text></View><View style={styles.flex}><Text style={styles.panelTitle}>{entry.location}</Text><Text style={styles.reportDate}>{entry.birds} birds seen</Text><Text style={styles.subtle}>{entry.notes || 'No notes added.'}</Text>{entry.ownerId === session.user.id ? <ShareToggle shared={entry.shared} onPress={() => toggleEntrySharing('journal', entry.id, entry.shared)} /> : <Text style={styles.sharedByLabel}>SHARED BY A LINKED HUNTER</Text>}</View></View>)}
           </ScrollView>
@@ -1012,6 +1024,17 @@ function WindMarker({ point, wind, showWind, showLabel, onPress, onMove }: { poi
   );
 }
 
+function WaypointDropdown({ waypoints, selectedId, onSelect }: { waypoints: Waypoint[]; selectedId: string; onSelect: (point: Waypoint) => void }) {
+  const [open, setOpen] = useState(false);
+  const selected = waypoints.find((point) => point.id === selectedId);
+  return <View style={styles.dropdownWrap}>
+    <Pressable style={styles.dropdownButton} onPress={() => setOpen((value) => !value)}>
+      <Text style={styles.dropdownText}>{selected ? `${WAYPOINT_ICONS[selected.type]}  ${selected.name}` : 'Choose a waypoint'}</Text><Text style={styles.dropdownArrow}>{open ? '▲' : '▼'}</Text>
+    </Pressable>
+    {open && <ScrollView style={styles.dropdownMenu} nestedScrollEnabled>{waypoints.map((point) => <Pressable key={point.id} style={styles.dropdownOption} onPress={() => { onSelect(point); setOpen(false); }}><Text style={styles.waypointChoiceIcon}>{WAYPOINT_ICONS[point.type]}</Text><View style={styles.flex}><Text style={styles.rowTitle}>{point.name}</Text><Text style={styles.controlSub}>{point.type}</Text></View>{selectedId === point.id && <Text style={styles.controlValue}>✓</Text>}</Pressable>)}</ScrollView>}
+  </View>;
+}
+
 function ShareToggle({ shared, onPress }: { shared: boolean; onPress: () => void }) {
   return (
     <Pressable style={styles.shareToggleRow} onPress={onPress} accessibilityRole="switch" accessibilityState={{ checked: shared }}>
@@ -1022,7 +1045,7 @@ function ShareToggle({ shared, onPress }: { shared: boolean; onPress: () => void
 }
 
 function WeatherPanel({ weather, loading, onRefresh }: { weather: Weather | null; loading: boolean; onRefresh: () => void }) {
-  const [range, setRange] = useState<'Hourly' | '24 Hours' | '7 Day'>('Hourly');
+  const [range, setRange] = useState<'Hourly' | '24 Hours' | '72 Hours' | '7 Day'>('Hourly');
   const [selectedDay, setSelectedDay] = useState(0);
   if (!weather) {
     return (
@@ -1048,7 +1071,7 @@ function WeatherPanel({ weather, loading, onRefresh }: { weather: Weather | null
         <Metric icon="◴" label="Pressure" value={`${weather.pressure.toFixed(2)} in`} />
       </View>
       <View style={styles.compactForecastTabs}>
-        {(['Hourly', '24 Hours', '7 Day'] as const).map((item) => (
+        {(['Hourly', '24 Hours', '72 Hours', '7 Day'] as const).map((item) => (
           <Pressable key={item} style={[styles.compactForecastTab, range === item && styles.compactForecastTabActive]} onPress={() => { setRange(item); setSelectedDay(0); }}>
             <Text style={[styles.compactForecastText, range === item && styles.compactForecastTextActive]}>{item}</Text>
           </Pressable>
@@ -1056,7 +1079,7 @@ function WeatherPanel({ weather, loading, onRefresh }: { weather: Weather | null
       </View>
       {range !== '7 Day' ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hourlyRail}>
-          {weather.hourly.slice(0, range === 'Hourly' ? 12 : 24).map((hour, index) => <View style={styles.hourCard} key={`${hour.time}-${index}`}><Text style={styles.hourTime}>{hour.time}</Text><Text style={styles.hourTemp}>{hour.temp.toFixed(0)}°</Text><Text style={styles.hourWind}>{hour.wind.toFixed(0)} mph</Text></View>)}
+          {weather.hourly.slice(0, range === 'Hourly' ? 12 : range === '24 Hours' ? 24 : 72).map((hour, index) => <View style={styles.hourCard} key={`${hour.time}-${index}`}><Text style={styles.hourTime}>{hour.time}</Text><Text style={styles.hourTemp}>{hour.temp.toFixed(0)}°</Text><Text style={styles.hourRain}>● {hour.precipChance.toFixed(0)}%</Text><Text style={styles.hourWind}>{hour.wind.toFixed(0)} mph</Text></View>)}
         </ScrollView>
       ) : (
         <View style={styles.dayForecastWrap}>
@@ -1120,6 +1143,8 @@ const styles = StyleSheet.create({
   emptyMapTools: { position: 'absolute', right: 14, top: 14, gap: 9 },
   actionButton: { backgroundColor: 'rgba(239,124,34,0.94)', borderColor: '#FFB16F' },
   cleanSlateCard: { position: 'absolute', left: 15, right: 15, bottom: 18, padding: 16, borderRadius: 15, backgroundColor: 'rgba(8,21,16,0.94)', borderWidth: 1, borderColor: '#536158' },
+  tipClose: { position: 'absolute', right: 8, top: 6, width: 28, height: 28, alignItems: 'center', justifyContent: 'center', zIndex: 2 },
+  tipCloseText: { color: '#FFFFFF', fontSize: 22, lineHeight: 24 },
   cleanSlateTitle: { color: '#EADCCB', fontFamily: 'Georgia', fontSize: 21, fontWeight: '800' },
   cleanSlateText: { color: '#A5AEA8', lineHeight: 19, marginTop: 5 },
   landLabel: { maxWidth: 138, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 5, borderWidth: 1 },
@@ -1179,6 +1204,7 @@ const styles = StyleSheet.create({
   hourTime: { color: '#96A099', fontSize: 10 },
   hourTemp: { color: '#F1E7D8', fontSize: 17, fontWeight: '800', marginTop: 3 },
   hourWind: { color: ORANGE, fontSize: 9, marginTop: 2 },
+  hourRain: { color: '#73A9CC', fontSize: 9, fontWeight: '800', marginTop: 2 },
   weatherMetrics: { flexDirection: 'row' },
   weatherMain: { width: '25%', justifyContent: 'center', paddingRight: 7, borderRightWidth: 1, borderRightColor: '#59645E' },
   temperature: { color: '#FFFFFF', fontSize: 37, fontWeight: '800' },
@@ -1319,6 +1345,12 @@ const styles = StyleSheet.create({
   waypointChoiceIcon: { fontSize: 12 },
   waypointChoiceText: { color: '#B4BDB7', fontSize: 10, fontWeight: '800' },
   waypointChoiceTextActive: { color: '#FFFFFF' },
+  dropdownWrap: { position: 'relative', zIndex: 5 },
+  dropdownButton: { minHeight: 46, paddingHorizontal: 12, borderRadius: 11, borderWidth: 1, borderColor: '#3A4B41', backgroundColor: '#0A1710', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dropdownText: { color: '#F4EEE5', fontSize: 13, fontWeight: '700' },
+  dropdownArrow: { color: ORANGE, fontSize: 10 },
+  dropdownMenu: { maxHeight: 190, borderWidth: 1, borderTopWidth: 0, borderColor: '#45594D', borderBottomLeftRadius: 11, borderBottomRightRadius: 11, backgroundColor: '#0C1A13' },
+  dropdownOption: { minHeight: 48, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: 1, borderBottomColor: '#293A31' },
   inlineInputs: { flexDirection: 'row', gap: 8 },
   emptyState: { alignItems: 'center', backgroundColor: '#0D1B14', borderWidth: 1, borderStyle: 'dashed', borderColor: '#3A4D42', borderRadius: 18, padding: 28, gap: 6 },
   emptyStateIcon: { color: ORANGE, fontSize: 30 },
