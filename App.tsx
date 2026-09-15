@@ -19,7 +19,7 @@ import type { Session } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 
-// DuckCast Expo Go preview: private by default, shared only through accepted email links.
+// DuckCast live preview: private by default, shared only through accepted email links.
 
 type Tab = 'Map' | 'Weather' | 'Reports' | 'Journal' | 'Profile';
 type WaypointType = 'Hunt Spot' | 'Camera' | 'Blind' | 'Food Plot' | 'Access';
@@ -117,6 +117,7 @@ export default function App() {
   const [publicLandGeojson, setPublicLandGeojson] = useState<Record<string, any>>({});
   const [parcelGeojson, setParcelGeojson] = useState<any>({ type: 'FeatureCollection', features: [] });
   const [landLabels, setLandLabels] = useState<LandLabel[]>([]);
+  const landRequest = useRef(0);
   const [radarUrl, setRadarUrl] = useState('');
   const [radarTime, setRadarTime] = useState('');
   const [radarFrames, setRadarFrames] = useState<RadarFrame[]>([]);
@@ -137,6 +138,10 @@ export default function App() {
     () => waypoints.find((point) => point.id === selectedId),
     [waypoints, selectedId]
   );
+  const visibleLandLabels = useMemo(() => thinLandLabels(
+    landLabels.filter((label) => label.kind === 'parcel' ? showBoundaries : showPublicLands && !showBoundaries),
+    region
+  ), [landLabels, region, showBoundaries, showPublicLands]);
 
   useEffect(() => {
     void locateUser();
@@ -231,6 +236,7 @@ export default function App() {
   }, [region.latitude, region.longitude]);
 
   async function refreshLandLayers() {
+    const request = ++landRequest.current;
     const withinBoundaryScale = region.latitudeDelta * 69 <= 5;
     if (!withinBoundaryScale) {
       setParcelGeojson({ type: 'FeatureCollection', features: [] });
@@ -246,32 +252,43 @@ export default function App() {
     const nextLabels: LandLabel[] = [];
     try {
       if (showPublicLands) {
-        const response = await fetch(`https://services.arcgis.com/v01gqwM5QqNysAAi/arcgis/rest/services/PADUS_Public_Access/FeatureServer/0/query?where=1%3D1&outFields=OBJECTID,Unit_Nm,Pub_Access,MngNm_Desc,DesTp_Desc&${geometryQuery}`);
-        const data = response.ok ? await response.json() : { features: [] };
         const buckets: Record<string, any[]> = { Open: [], Restricted: [], Closed: [], Unknown: [] };
-        for (const feature of data.features ?? []) {
-          const access = String(feature.properties?.Pub_Access ?? 'Unknown');
-          const bucket = access.startsWith('Open') ? 'Open' : access.startsWith('Restricted') ? 'Restricted' : access.startsWith('Closed') ? 'Closed' : 'Unknown';
-          buckets[bucket]!.push(feature);
-          const center = featureCenter(feature.geometry);
-          const name = feature.properties?.Unit_Nm || feature.properties?.MngNm_Desc || feature.properties?.DesTp_Desc;
-          if (center && name && nextLabels.length < 35 && !nextLabels.some((label) => label.name === name)) nextLabels.push({ id: `public-${feature.id ?? nextLabels.length}`, name, ...center, kind: 'public' });
-        }
+        // Prefer the state WMA boundary over PAD-US for Arkansas; both often
+        // describe the same land and drawing both creates doubled outlines.
         if (activeState === 'AR') {
           const arResponse = await fetch(`https://gis.arkansas.gov/arcgis/rest/services/FEATURESERVICES/Boundaries/FeatureServer/37/query?where=1%3D1&outFields=objectid,fname,flabel,wma&${geometryQuery}`);
           const arData = arResponse.ok ? await arResponse.json() : { features: [] };
           for (const feature of arData.features ?? []) {
-            buckets.Open!.push(feature);
+            // WMA designation alone is not proof that hunting is open.
+            buckets.Unknown!.push(feature);
             const center = featureCenter(feature.geometry);
             const name = feature.properties?.fname || feature.properties?.flabel || feature.properties?.wma;
             if (center && name && nextLabels.length < 35 && !nextLabels.some((label) => label.name === name)) nextLabels.push({ id: `ar-wma-${feature.id ?? nextLabels.length}`, name, ...center, kind: 'public' });
           }
+        } else {
+          const response = await fetch(`https://services.arcgis.com/v01gqwM5QqNysAAi/arcgis/rest/services/PADUS_Public_Access/FeatureServer/0/query?where=1%3D1&outFields=OBJECTID,Unit_Nm,Pub_Access,MngNm_Desc,DesTp_Desc&${geometryQuery}`);
+          const data = response.ok ? await response.json() : { features: [] };
+          const seenShapes = new Set<string>();
+          for (const feature of data.features ?? []) {
+            const center = featureCenter(feature.geometry);
+            if (!center) continue;
+            const shapeKey = JSON.stringify(feature.geometry?.coordinates);
+            if (seenShapes.has(shapeKey)) continue;
+            seenShapes.add(shapeKey);
+            const access = String(feature.properties?.Pub_Access ?? 'Unknown');
+            const bucket = access.startsWith('Open') ? 'Open' : access.startsWith('Restricted') ? 'Restricted' : access.startsWith('Closed') ? 'Closed' : 'Unknown';
+            buckets[bucket]!.push(feature);
+            const name = feature.properties?.Unit_Nm || feature.properties?.MngNm_Desc || feature.properties?.DesTp_Desc;
+            if (name && nextLabels.length < 35 && !nextLabels.some((label) => label.name === name)) nextLabels.push({ id: `public-${feature.id ?? nextLabels.length}`, name, ...center, kind: 'public' });
+          }
         }
+        if (request !== landRequest.current) return;
         setPublicLandGeojson(Object.fromEntries(Object.entries(buckets).map(([key, features]) => [key, { type: 'FeatureCollection', features }])));
       } else setPublicLandGeojson({});
       if (showBoundaries && activeState === 'WI') {
         const response = await fetch(`https://dnrmaps.wi.gov/arcgis/rest/services/DW_Map_Dynamic/EN_County_Tax_Parcels_WTM_Ext_Dynamic_L16/MapServer/0/query?where=1%3D1&outFields=OBJECTID,PARCELID,TAXPARCELID,OWNERNME1,OWNERNME2,SITEADRESS,PLACENAME,CONAME,DEEDACRES,GISACRES,PROPCLASS,TAXROLLYEAR&${geometryQuery}`);
         const data = response.ok ? await response.json() : { features: [] };
+        if (request !== landRequest.current) return;
         setParcelGeojson({ type: 'FeatureCollection', features: data.features ?? [] });
         for (const feature of (data.features ?? []).slice(0, 80)) {
           const center = featureCenter(feature.geometry);
@@ -279,7 +296,7 @@ export default function App() {
           if (center && owner) nextLabels.push({ id: `parcel-${feature.id}`, name: owner, ...center, kind: 'parcel' });
         }
       } else setParcelGeojson({ type: 'FeatureCollection', features: [] });
-      setLandLabels(nextLabels);
+      if (request === landRequest.current) setLandLabels(nextLabels);
     } catch {
       Alert.alert('Land layers', 'Land boundary data could not be loaded for this map area.');
     }
@@ -603,7 +620,7 @@ export default function App() {
               >
                 {showPublicLands && <LandLayers data={publicLandGeojson} />}
                 {showBoundaries && <Geojson geojson={parcelGeojson} fillColor="rgba(255,235,175,0.02)" strokeColor="rgba(255,235,175,0.88)" strokeWidth={0.8} tappable onPress={showParcelDetails} />}
-                <LandLabels labels={landLabels.filter((label) => label.kind === 'public' ? showPublicLands : showBoundaries)} />
+                <LandLabels labels={visibleLandLabels} />
                 {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={7} opacity={0.68} zIndex={2} tileSize={256} />}
                 {showWaypoints && waypoints.map((point) => (
                   <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={selectedId === point.id} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
@@ -703,7 +720,7 @@ export default function App() {
             >
               {showPublicLands && <LandLayers data={publicLandGeojson} />}
               {showBoundaries && <Geojson geojson={parcelGeojson} fillColor="rgba(255,235,175,0.02)" strokeColor="rgba(255,235,175,0.88)" strokeWidth={0.8} tappable onPress={showParcelDetails} />}
-              <LandLabels labels={landLabels.filter((label) => label.kind === 'public' ? showPublicLands : showBoundaries)} />
+              <LandLabels labels={visibleLandLabels} />
               {showRadar && !!radarUrl && <UrlTile key={radarUrl} urlTemplate={radarUrl} maximumZ={20} maximumNativeZ={7} opacity={0.68} zIndex={2} tileSize={256} />}
               {showWaypoints && waypoints.map((point) => (
                 <WindMarker key={point.id} point={point} wind={waypointWind[point.id]} showWind={showWind} showLabel={selectedId === point.id} onPress={() => { setSelectedId(point.id); setWeather(null); void refreshWeather(point); }} onMove={(latitude, longitude) => moveWaypoint(point, latitude, longitude)} />
@@ -945,6 +962,22 @@ function featureCenter(geometry: any) {
     latitude: (Math.min(...latitudes) + Math.max(...latitudes)) / 2,
     longitude: (Math.min(...longitudes) + Math.max(...longitudes)) / 2,
   };
+}
+
+function thinLandLabels(labels: LandLabel[], region: Region) {
+  // Keep one name per screen cell so owner and public-land labels do not stack.
+  const cells = new Set<string>();
+  const west = region.longitude - region.longitudeDelta / 2;
+  const south = region.latitude - region.latitudeDelta / 2;
+  return labels.filter((label) => {
+    const column = Math.floor(((label.longitude - west) / region.longitudeDelta) * 7);
+    const row = Math.floor(((label.latitude - south) / region.latitudeDelta) * 9);
+    if (column < 0 || column >= 7 || row < 0 || row >= 9) return false;
+    const cell = `${column}-${row}`;
+    if (cells.has(cell)) return false;
+    cells.add(cell);
+    return true;
+  });
 }
 
 const EMPTY_COLLECTION = { type: 'FeatureCollection', features: [] };
